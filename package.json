@@ -1,0 +1,17 @@
+{
+  "name": "my-agent",
+  "version": "0.1.0",
+  "description": "A minimal CLI coding agent: point it at a project folder and a task, and it works on the project with an LLM.",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "my-agent": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

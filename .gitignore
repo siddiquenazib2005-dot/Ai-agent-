@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Sensitive / secrets
+.env
+*.key
+*.pem
+credentials*
+
+# Runtime state (regenerate locally)
+sessions/
+checkpoints.json
+usage.json
+agent.log
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Test fixtures (generated)
+test/agent-test-repo/

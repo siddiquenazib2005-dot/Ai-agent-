@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b0f14"/>
+      <stop offset="1" stop-color="#11161f"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#g)"/>
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#1f2a3a" stroke-width="18"/>
+  <path d="M176 336 L336 336 L336 336" fill="none" stroke="none"/>
+  <rect x="166" y="236" width="180" height="10" rx="5" fill="#58a6ff"/>
+  <!-- stylised agent node: three pulse rings -->
+  <circle cx="256" cy="200" r="46" fill="none" stroke="#4fd6a8" stroke-width="14" opacity=".9"/>
+  <circle cx="256" cy="200" r="30" fill="#0b0f14" stroke="#3ecf7e" stroke-width="8"/>
+  <circle cx="256" cy="200" r="12" fill="#4fd6a8"/>
+  <circle cx="256" cy="200" r="84" fill="none" stroke="#2a3a55" stroke-width="4" opacity=".6"/>
+  <text x="256" y="392" text-anchor="middle" font-family="sans-serif" font-size="44" font-weight="800" fill="#dde4ee">my-agent</text>
+</svg>
