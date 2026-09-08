@@ -1,0 +1,46 @@
+# Build recipe only. Move to .github/workflows/android-debug.yml using an
+# account/connection authorized to write workflows, then commit on this branch.
+name: Android test APK
+on:
+  push:
+    branches: [main, android/test-apk-20260909]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Apply reviewed core changes and run tests
+        run: npm test
+      - name: Commit applied core changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add agentLoop.js commandPolicy.js index.js llmConfig.js providers/baseProvider.js providers/openaiCompatibleProvider.js test/f4-checkpoint-audit.test.mjs
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix: materialize regression-verified core integration'
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'platform-tools'
+      - name: Build lint and verify APK
+        run: npm run android:build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Future-Jarvis-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30

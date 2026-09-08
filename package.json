@@ -1,11 +1,21 @@
 {
   "name": "my-agent",
   "version": "0.2.0",
-  "description": "A minimal CLI coding agent: point it at a project folder and a task, and it works on the project with an LLM.",
+  "description": "Independent coding agent with an Android WebView client",
   "type": "module",
   "main": "index.js",
   "bin": { "my-agent": "./index.js" },
-  "scripts": { "start": "node index.js", "test": "node test/run-all.mjs", "bridge": "node index.js bridge", "android:build": "bash android/scripts/build_apk.sh" },
-  "engines": { "node": ">=18" },
+  "scripts": {
+    "setup:core": "node scripts/apply-core-patch.mjs",
+    "prestart": "npm run setup:core",
+    "start": "node index.js",
+    "pretest": "npm run setup:core",
+    "test": "node test/run-all.mjs",
+    "prebridge": "npm run setup:core",
+    "bridge": "node index.js bridge",
+    "preandroid:build": "npm run setup:core",
+    "android:build": "bash android/scripts/build_apk.sh"
+  },
+  "engines": { "node": ">=20.3" },
   "license": "MIT"
 }
