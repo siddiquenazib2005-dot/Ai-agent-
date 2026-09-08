@@ -1,358 +1,190 @@
-/* my-agent mobile console — logic (works in WebView + Node for tests). */
 'use strict';
-(function () {
-  const $ = (id) => document.getElementById(id);
-  const state = {
-    client: null,
-    baseUrl: localStorage.getItem('ma_bridge') || 'http://127.0.0.1:8787',
-    mode: 'confirm',
-    working: false,
-    pendingConfirm: null,
-    changedFiles: [],
-    termEntries: [],
-    plan: null,
-  };
-
-  // ---------- helpers -------------------------------------------------------
-  function el(tag, cls, txt) {
-    const n = document.createElement(tag);
-    if (cls) n.className = cls;
-    if (txt !== undefined) n.textContent = txt;
-    return n;
-  }
-  function toast(msg) {
-    const t = $('toast');
-    t.textContent = msg; t.classList.remove('hidden');
-    setTimeout(() => t.classList.add('hidden'), 2600);
-  }
-  function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+(() => {
+  const $ = id => document.getElementById(id);
+  const read = (key, fallback = '') => { try { return localStorage.getItem(key) || fallback; } catch { return fallback; } };
+  const save = (key, value) => { try { localStorage.setItem(key, value); } catch { /* storage unavailable: this session still works */ } };
+  const state = { client: null, working: false, submitting: false, pending: null, files: [], repo: '', profiles: [], resume: null, stream: null, generation: 0, tools: new Map() };
+  let toastTimer;
+  function node(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; }
+  function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 5000); }
+  function connection(label, kind = '') { $('connText').textContent = label; $('connection').className = 'connection ' + kind; }
   function go(screen) {
-    document.querySelectorAll('.screen').forEach((s) => { s.classList.remove('active'); s.style.display = 'none'; });
-    const target = $('screen-' + screen);
-    target.style.display = 'block'; target.classList.add('active');
-    document.querySelectorAll('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.go === screen));
-    if (screen === 'sessions') renderSessions();
-    if (screen === 'files') renderFiles();
-    if (screen === 'terminal') renderTerminal();
-    if (screen === 'settings') refreshHealth();
+    if (!$('screen-' + screen)) screen = 'home';
+    document.querySelectorAll('.screen').forEach(n => n.classList.toggle('active', n.id === 'screen-' + screen));
+    document.querySelectorAll('.nav-btn').forEach(n => { const selected = n.dataset.go === screen; n.classList.toggle('active', selected); if (selected) n.setAttribute('aria-current', 'page'); else n.removeAttribute('aria-current'); });
+    if (screen === 'sessions') sessions();
+    if (location.hash !== '#' + screen) history.replaceState(null, '', '#' + screen);
+    window.scrollTo(0, 0);
   }
-  function setPill(txt, cls) { $('connText').textContent = txt; $('connPill').className = 'status-pill' + (cls ? ' ' + cls : ''); }
-
-  // ---------- activity feed -------------------------------------------------
-  function addActivity(head, body, kind) {
-    const feed = $('activityFeed');
-    const card = el('div', 'activity');
-    const h = el('div', 'a-head');
-    const dot = el('span', 'pulse');
-    dot.textContent = kind === 'done' ? '✓' : '●';
-    const htxt = el('span');
-    htxt.textContent = head;
-    h.appendChild(dot); h.appendChild(htxt);
-    card.appendChild(h);
-    if (body) { const b = el('div', 'a-body'); b.textContent = body; card.appendChild(b); }
-    const st = el('span', 'st'); st.textContent = new Date().toLocaleTimeString();
-    card.appendChild(st);
-    feed.appendChild(card);
-    feed.scrollTop = feed.scrollHeight;
+  function busy(value, title, subtitle) {
+    state.working = value; $('send').disabled = value || state.submitting; $('newTask').disabled = value || state.submitting; $('cancel').disabled = !value;
+    $('runState').classList.toggle('working', value); $('progress').hidden = !value;
+    if (title) $('currentAction').textContent = title;
+    if (subtitle) $('runSubtitle').textContent = subtitle;
+    if (!value) document.querySelectorAll('.event.live').forEach(n => n.classList.remove('live'));
+  }
+  function event(title, text = '', kind = '') {
+    $('activityFeed').querySelector('.empty')?.remove();
+    document.querySelectorAll('.event.live').forEach(n => n.classList.remove('live'));
+    const card = node('article', 'event ' + kind);
+    card.append(node('div', 'event-title', title), node('time', '', new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })), node('div', 'event-body', text));
+    $('activityFeed').append(card);
+    while ($('activityFeed').children.length > 300) $('activityFeed').firstChild.remove();
     return card;
   }
-
-  function toolBadge(status) {
-    const map = { ok: ['badge ok', 'Completed'], wait: ['badge wait', 'Waiting for approval'], run: ['badge run', 'Running'], err: ['badge err', 'Failed'], rejected: ['badge err', 'Rejected'], refused: ['badge err', 'Refused'] };
-    const [cls, txt] = map[status] || ['badge wait', status || '…'];
-    const b = el('span', cls); b.textContent = txt; return b;
-  }
-
-  function addToolCard(name, args, id) {
-    const feed = $('activityFeed');
-    const card = el('div', 'tool-card');
-    card.id = 'tool-' + id;
-    const row = el('div', 't-row');
-    const nm = el('span', 't-name'); nm.textContent = name.toUpperCase();
-    const argsTxt = JSON.stringify(args || {});
-    nm.title = argsTxt;
-    row.appendChild(nm);
-    const badge = toolBadge('run'); badge.dataset.st = 'run';
-    row.appendChild(badge);
-    const detail = el('div', 't-detail');
-    const pre = el('pre'); pre.textContent = argsTxt;
-    detail.appendChild(pre);
-    card.appendChild(row); card.appendChild(detail);
-    card.addEventListener('click', () => card.classList.toggle('open'));
-    feed.appendChild(card);
-    return card;
-  }
-  function setToolStatus(id, status, result) {
-    const card = $('tool-' + id);
-    if (!card) return;
-    const badge = card.querySelector('.badge');
-    badge.className = 'badge ' + (['ok','wait','err'].includes(status.split(' ')[0]) ? status.split(' ')[0] : 'err');
-    badge.textContent = status === 'ok' ? 'Completed' : status === 'wait' ? 'Waiting for approval' : status === 'run' ? 'Running' : (status.toUpperCase());
-    if (result) {
-      let detail = card.querySelector('.t-detail pre');
-      if (detail) detail.textContent = detail.textContent + '\n\n' + String(result).slice(0, 2000);
+  function previewFiles() {
+    $('fileList').replaceChildren();
+    if (!state.files.length) $('fileList').append(node('p', 'empty', 'No file changes yet. Files appear after a successful file tool operation.'));
+    for (const file of state.files) {
+      const row = node('button', 'file-row'); row.append(node('span', '', file.path), node('small', '', file.op === 'create' ? 'Created ↗' : 'Modified ↗'));
+      row.onclick = async () => {
+        try { const data = await state.client.file(state.repo, file.path); $('previewTitle').textContent = data.path; $('previewContent').textContent = data.content; $('filePreview').hidden = false; }
+        catch (err) { toast(err.message); }
+      }; $('fileList').append(row);
     }
   }
-// ---------- screens: sessions / files / terminal / plan --------------------
-  function renderSessions() {
-    const list = $('sessionList');
-    list.innerHTML = '';
-    const home = $('homeSessions');
-    home.innerHTML = '';
-    state.client.listSessions().then((r) => {
-      const s = r.sessions || [];
-      s.forEach((sess) => {
-        const li = el('li');
-        const t = el('div'); t.textContent = sess.task || '(no task)';
-        const m = el('div', 's-meta');
-        m.textContent = `${sess.id} · ${sess.repo} · msgs ${sess.messages} · ${sess.updatedAt}`;
-        const btn = el('button'); btn.textContent = 'Resume';
-        btn.addEventListener('click', () => {
-          $('inpRepo').value = sess.repo; $('inpTask').value = sess.task || '';
-          localStorage.setItem('ma_repo', sess.repo);
-          go('task');
-          toast('Session selected');
-        });
-        li.appendChild(t); li.appendChild(m); li.appendChild(btn);
-        list.appendChild(li);
-        if (home.children.length < 5) home.appendChild(li.cloneNode(true));
+  function showConfirmation(p) {
+    state.pending = p.id; $('confirmTitle').textContent = p.label; $('confirmPreview').textContent = p.preview || ''; $('confirmError').textContent = '';
+    $('approve').disabled = false; $('reject').disabled = false;
+    if (!$('confirmation').open) $('confirmation').showModal();
+    $('reject').focus();
+    busy(true, p.tool === 'plan' ? 'Review the plan' : 'Waiting for your approval');
+  }
+  async function resolveConfirmation(approved) {
+    if (!state.pending) return;
+    $('approve').disabled = true; $('reject').disabled = true;
+    try {
+      const id = state.pending;
+      await state.client.confirm(id, approved);
+      if (state.pending === id) { state.pending = null; $('confirmation').close(); busy(true, approved ? 'Continuing task' : 'Action rejected'); }
+    } catch (err) { $('confirmError').textContent = err.message; }
+    finally { $('approve').disabled = false; $('reject').disabled = false; }
+  }
+  async function refreshProfiles(client) {
+    const [health, result] = await Promise.all([client.health(), client.providers()]);
+    if (state.client !== client) return;
+    state.profiles = result.providers;
+    const selected = $('provider').value || read('fj_provider');
+    $('provider').replaceChildren(); $('providerList').replaceChildren(); $('models').replaceChildren();
+    for (const p of result.providers) {
+      const option = node('option', '', p.id + (p.configured ? '' : ' · needs key')); option.value = p.id; $('provider').append(option);
+      const item = node('p', 'helper', p.id + ' · ' + p.name + '\n' + p.model + ' · ' + (p.configured ? 'Credentials configured' : 'Missing credentials')); $('providerList').append(item);
+      const model = node('option'); model.value = p.model; $('models').append(model);
+    }
+    if (result.providers.some(p => p.id === selected)) $('provider').value = selected;
+    $('model').placeholder = health.config.model + ' (default)';
+    $('health').textContent = 'Bridge connected · ' + health.config.keys.length + ' configured key(s). This checks bridge configuration, not live provider availability.';
+    connection('Connected', 'connected');
+    $('workspaceHint').textContent = 'Host connected · review changes in confirm mode.';
+  }
+  async function connect() {
+    const generation = ++state.generation;
+    state.client?.close(); connection('Connecting'); $('connect').disabled = true;
+    try {
+      const client = createAgentClient($('bridgeUrl').value.trim(), { token: $('bridgeToken').value }); state.client = client;
+      save('fj_bridge', client.baseUrl);
+      const on = (name, fn) => client.on(name, p => { if (state.client === client) fn(p); });
+      on('connection.error', p => { connection('Offline', 'error'); $('health').textContent = p.message; toast(p.message); });
+      on('agent.snapshot', p => {
+        state.files = p.changedFiles || []; state.repo = (p.activeRun || p.lastRun)?.repo || state.repo; previewFiles();
+        if (p.activeRun) { busy(true, 'Task active on host', 'Connected to the current run. Missed streaming text is not replayed.'); $('requestText').textContent = p.activeRun.task; }
+        else if (p.completion) busy(false, ({ done: 'Task finished', cancelled: 'Task cancelled', error: 'Task failed', plan_aborted: 'Plan not approved', tests_failed: 'Checks failed', limit_reached: 'Iteration limit reached' })[p.completion.status] || 'Task ended');
+        else busy(false, 'Ready when you are');
+        if (p.pending?.length) showConfirmation(p.pending[0]);
+        else { state.pending = null; $('confirmation').close(); }
       });
-    }).catch((e) => { list.appendChild(el('div', 'dim', 'Cannot reach bridge: ' + e.message)); });
+      on('agent.started', p => {
+        state.repo = p.repo; state.files = []; state.stream = null; state.tools.clear(); previewFiles(); $('filePreview').hidden = true;
+        $('activityFeed').replaceChildren(); $('termList').replaceChildren(node('p', 'empty', 'No commands have run yet.'));
+        $('requestText').textContent = p.task; $('workspaceName').textContent = p.repo.split('/').filter(Boolean).pop() || p.repo;
+        busy(true, 'Understanding your task', p.model + ' · ' + p.provider); event('Task started', p.task, 'live'); go('activity');
+      });
+      on('agent.thinking', p => {
+        busy(true, p.phase === 'planning' ? 'Planning the task' : 'Agent is working', 'Waiting for model output · iteration ' + p.iteration);
+        state.stream = event(p.phase === 'planning' ? 'Creating a plan' : 'Model output', '', 'live').querySelector('.event-body');
+      });
+      on('agent.stream.delta', p => {
+        if (!state.stream) state.stream = event('Model output', '', 'live').querySelector('.event-body');
+        const text = state.stream.textContent + (p.delta || '');
+        state.stream.textContent = text.length > 100000 ? '[Earlier output trimmed on device]\n' + text.slice(-90000) : text;
+      });
+      on('agent.tool.start', p => {
+        state.stream = null;
+        const label = ({ write_file: 'Creating a file', edit_file: 'Editing code', read_file: 'Reading a file', list_files: 'Inspecting files', search_code: 'Searching code', run_command: 'Running a command', git_status: 'Checking Git status' })[p.name] || p.name;
+        busy(true, label); const card = event(label, '', 'live');
+        const badge = node('span', 'badge', 'Running'); card.querySelector('.event-title').append(badge);
+        const details = node('details'); details.append(node('summary', '', p.name + ' · details'), node('pre', '', typeof p.args === 'string' ? p.args : JSON.stringify(p.args, null, 2))); card.append(details);
+        state.tools.set(p.id, { card, badge, details });
+      });
+      on('agent.tool.complete', p => {
+        const tool = state.tools.get(p.id); if (!tool) return;
+        tool.card.classList.remove('live'); tool.card.classList.add(p.status === 'ok' ? 'done' : 'error');
+        tool.badge.textContent = ({ ok: 'Completed', rejected: 'Rejected', refused: 'Blocked', error: 'Failed' })[p.status] || p.status;
+        tool.details.append(node('pre', '', p.result));
+      });
+      on('agent.confirmation.required', showConfirmation);
+      on('agent.plan.ready', p => event('Plan ready for review', p.plan));
+      on('agent.file.changed', p => { state.files = [p, ...state.files.filter(f => f.path !== p.path)]; previewFiles(); });
+      on('agent.command.output', p => {
+        $('termList').querySelector('.empty')?.remove(); const card = node('article', 'term-card');
+        card.append(node('strong', '', '$ ' + p.cmd), node('p', 'helper', (p.timedOut ? 'Timed out' : 'Exit ' + p.exitCode) + ' · ' + p.durationMs + ' ms'), node('pre', '', p.result)); $('termList').append(card);
+      });
+      on('agent.test.complete', p => event(p.passed ? 'Checks passed' : 'Checks failed', p.cmd + ' · attempt ' + p.attempt, p.passed ? 'done' : 'error'));
+      on('agent.completed', p => {
+        state.stream = null;
+        const title = ({ done: 'Task finished', cancelled: 'Task cancelled', plan_aborted: 'Plan not approved', tests_failed: 'Checks still failing', limit_reached: 'Iteration limit reached' })[p.status] || 'Task ended';
+        busy(false, title, 'Review the timeline, file changes and terminal output.');
+        event(title, p.finalAnswer || '', p.status === 'done' ? 'done' : 'error'); state.pending = null; $('confirmation').close();
+      });
+      on('agent.error', p => { state.stream = null; busy(false, 'Task failed', p.message); event('Task failed', p.message, 'error'); state.pending = null; $('confirmation').close(); });
+      await client.connect(); await refreshProfiles(client);
+    } catch (err) { if (generation === state.generation) { connection('Offline', 'error'); $('health').textContent = err.message; } }
+    finally { if (generation === state.generation) $('connect').disabled = false; }
   }
-
-  function renderFiles() {
-    const list = $('fileList');
-    list.innerHTML = '';
-    if (!state.changedFiles.length) { list.appendChild(el('div', 'dim', 'No files changed in this session yet.')); return; }
-    state.changedFiles.forEach((f) => {
-      const it = el('div', 'f-item');
-      const p = el('span', 'mono'); p.textContent = f.path;
-      const op = el('span', 'f-op ' + f.op); op.textContent = f.op;
-      it.append(p, op);
-      list.appendChild(it);
-    });
-  }
-
-  function renderTerminal() {
-    const list = $('termList');
-    list.innerHTML = '';
-    if (!state.termEntries.length) { list.appendChild(el('div', 'dim', 'No commands executed yet.')); return; }
-    state.termEntries.forEach((t) => {
-      const card = el('div', 'term-card ' + (t.exit === 0 ? 'exit0' : 'exit1'));
-      const c = el('div', 't-cmd'); c.textContent = '$ ' + t.cmd;
-      const o = el('div', 't-out'); o.textContent = (t.out || '').slice(0, 2500);
-      const m = el('div', 't-meta'); m.textContent = `exit ${t.exit} · ${t.ms}ms`;
-      card.append(c, o, m);
-      list.appendChild(card);
-    });
-  }
-
-  function renderPlan(planText, approveEnabled) {
-    const ol = $('planSteps');
-    ol.innerHTML = '';
-    const steps = String(planText || '').split(/\r?\n/).map((s) => s.replace(/^\s*\d+[.)]\s*/, '').trim()).filter(Boolean);
-    (steps.length ? steps : ['(no plan steps produced)']).forEach((s) => {
-      const li = el('li'); li.textContent = s; ol.appendChild(li);
-    });
-    $('btnApprovePlan').style.opacity = approveEnabled ? '1' : '.4';
-    $('btnApprovePlan').dataset.enabled = approveEnabled ? '1' : '0';
-    $('btnRejectPlan').style.opacity = approveEnabled ? '1' : '.4';
-  }
-
-  function openConfirm(id, label, preview) {
-    state.pendingConfirm = id;
-    $('cfLabel').textContent = label;
-    const pre = $('cfPreview');
-    pre.innerHTML = '';
-    String(preview || '').split('\n').forEach((line) => {
-      const d = el('div');
-      if (line.startsWith('+ ')) { d.className = 'add'; d.textContent = line; }
-      else if (line.startsWith('- ')) { d.className = 'del'; d.textContent = line; }
-      else d.textContent = line;
-      pre.appendChild(d);
-    });
-    $('confirmModal').classList.remove('hidden');
-  }
-  function closeModal() { $('confirmModal').classList.add('hidden'); state.pendingConfirm = null; }
-// ---------- actions -------------------------------------------------------
-  function sendTask() {
-    if (state.working) { toast('Agent is busy — wait or cancel'); return; }
-    const repo = $('inpRepo').value.trim();
-    const task = $('inpTask').value.trim();
-    if (!repo || !task) { toast('Repository and task are required'); return; }
-    localStorage.setItem('ma_repo', repo);
-    const prompts = JSON.parse(localStorage.getItem('ma_recent') || '[]');
-    prompts.unshift(task);
-    localStorage.setItem('ma_recent', JSON.stringify(prompts.slice(0, 5)));
-    renderRecents();
-    state.client.run({
-      repo, task, mode: state.mode,
-      plan: state.mode === 'plan',
-      model: $('inpModel').value.trim() || null,
-    }).then((r) => {
-      if (r.status === 409) toast('A run is already active');
-    }).catch((e) => toast('Run failed: ' + e.message));
-    addActivity('Task queued', task, 'run');
-    go('activity');
-  }
-  function renderRecents() {
-    const list = $('recentPrompts');
-    list.innerHTML = '';
-    JSON.parse(localStorage.getItem('ma_recent') || '[]').slice(0, 5).forEach((p) => {
-      const li = el('li'); li.textContent = p;
-      li.addEventListener('click', () => { $('inpTask').value = p; });
-      list.appendChild(li);
-    });
-  }
-
-  // ---------- init ----------------------------------------------------------
-  function init() {
-    $('inpRepo').value = localStorage.getItem('ma_repo') || '';
-    $('inpBridge').value = state.baseUrl;
-    document.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => {
-      if (b.dataset.plan === '1') { state.mode = 'plan'; markMode(); }
-      go(b.dataset.go);
-    }));
-    document.querySelectorAll('.nav-btn').forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
-    document.querySelectorAll('.mode-btn[data-mode]').forEach((b) => b.addEventListener('click', () => { state.mode = b.dataset.mode; markMode(); }));
-    function markMode() {
-      document.querySelectorAll('.mode-btn[data-mode]').forEach((b) => b.classList.toggle('active', b.dataset.mode === state.mode));
-    }
-    markMode();
-    $('btnSend').addEventListener('click', sendTask);
-    $('btnSaveBridge').addEventListener('click', () => {
-      state.baseUrl = $('inpBridge').value.trim().replace(/\/$/, '');
-      localStorage.setItem('ma_bridge', state.baseUrl);
-      connectBridge();
-      toast('Bridge: ' + state.baseUrl);
-    });
-    $('btnApprove').addEventListener('click', () => {
-      if (state.pendingConfirm) state.client.confirm(state.pendingConfirm, true);
-      closeModal();
-    });
-    $('btnReject').addEventListener('click', () => {
-      if (state.pendingConfirm) state.client.confirm(state.pendingConfirm, false);
-      closeModal();
-    });
-    $('btnCloseModal').addEventListener('click', () => {
-      if (state.pendingConfirm) state.client.confirm(state.pendingConfirm, false);
-      closeModal();
-    });
-    $('btnApprovePlan').addEventListener('click', () => {
-      if ($('btnApprovePlan').dataset.enabled !== '1') return;
-      state.plan = null; renderPlan('', false);
-      state.mode = 'confirm';
-      go('task');
-      setTimeout(sendTask, 120);
-    });
-    $('btnRejectPlan').addEventListener('click', () => { state.plan = null; renderPlan('', false); go('task'); });
-    $('btnModeConfirm').addEventListener('click', () => { state.mode = 'confirm'; markMode(); });
-    $('btnModeAuto').addEventListener('click', () => { state.mode = 'auto'; markMode(); });
-    $('btnUndo').addEventListener('click', () => {
-      const repo = $('inpRepo').value.trim();
-      if (!repo) { toast('Set repository first'); return; }
-      state.client.undo(repo).then((r) => {
-        toast(r.data.done ? `Undone: ${r.data.restored.length} restored, ${r.data.deleted.length} removed` : 'Undo aborted: ' + (r.data.conflicts || r.data.warnings || []).join('; '));
-      }).catch((e) => toast('Undo error: ' + e.message));
-    });
-    renderRecents();
-    connectBridge();
-    go('home');
-  }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
-  else init();
-})();
-// ---------- bridge wiring --------------------------------------------------
-  function connectBridge() {
-    if (state.client) { try { state.client.close(); } catch { /* noop */ } }
-    state.client = window.createAgentClient(state.baseUrl);
-    state.changedFiles = [];
-    state.termEntries = [];
-    state.plan = null;
-
-    state.client.on('agent.started', (p) => {
-      state.working = true;
-      setPill('running', 'busy');
-      $('stAgentStatus').textContent = 'running';
-      $('stRepo').textContent = p.repo; $('stModel').textContent = p.model;
-      $('stMode').textContent = p.mode || state.mode;
-      $('stProvider').textContent = p.provider || '—';
-      $('activitySession').textContent = p.sessionId ? '· ' + p.sessionId : '';
-      addActivity('Agent started', `${p.task}\nmodel ${p.model} · mode ${p.mode}`, 'run');
-    });
-    state.client.on('agent.thinking', (p) => {
-      addActivity(`Thinking (iteration ${p.iteration})`, p.model || '', 'run');
-    });
-    state.client.on('agent.stream.delta', (p) => {
-      const feed = $('activityFeed');
-      const last = feed.children[feed.children.length - 1];
-      if (last && last.classList.contains('activity') && last.querySelector('.a-body')) {
-        let b = last.querySelector('.a-body');
-        b.textContent += p.delta;
-        if (b.textContent.length > 4000) b.textContent = b.textContent.slice(-3000) + ' …';
+  async function sessions() {
+    $('sessionList').replaceChildren(node('p', 'empty', 'Loading sessions…'));
+    try {
+      if (!state.client) throw new Error('Connect the bridge first');
+      const result = await state.client.listSessions(); $('sessionList').replaceChildren();
+      for (const s of result.sessions.slice(0, 50)) {
+        const card = node('article', 'session-row'); card.append(node('strong', '', s.task), node('p', '', s.repo));
+        const button = node('button', 'secondary', 'Continue session'); button.onclick = () => { if (state.working) return toast('Finish the active task first'); state.resume = s.id; $('repo').value = s.repo; $('task').value = ''; $('task').placeholder = 'Describe your follow-up task…'; $('resumeNote').textContent = 'Continuing the selected session. New task clears this selection.'; go('home'); }; card.append(button); $('sessionList').append(card);
       }
-    });
-    state.client.on('agent.tool.start', (p) => {
-      addToolCard(p.name, p.args, p.id);
-      addActivity('Tool → ' + p.name, JSON.stringify(p.args), 'run');
-    });
-    state.client.on('agent.tool.complete', (p) => {
-      setToolStatus(p.id, p.status, p.result);
-      if (p.status === 'rejected') toast('Action rejected');
-      if (p.status === 'refused') toast('Action refused by security policy');
-      if (p.status === 'error') toast('Tool error: ' + String(p.result).slice(0, 80));
-    });
-    state.client.on('agent.confirmation.required', (p) => {
-      addActivity('Approval needed', p.label, 'run');
-      openConfirm(p.id, p.label, p.preview);
-    });
-    state.client.on('agent.plan.ready', (p) => {
-      state.plan = p.plan;
-      renderPlan(p.plan, true);
-    });
-    state.client.on('agent.file.changed', (p) => {
-      state.changedFiles.unshift({ path: p.path, op: p.op });
-      renderFiles();
-    });
-    state.client.on('agent.command.output', (p) => {
-      const exitM = String(p.result).match(/^exit code: (\S+)/m);
-      const msM = String(p.result).match(/(\d+)ms/);
-      state.termEntries.unshift({
-        cmd: p.cmd, out: p.result,
-        exit: exitM ? (exitM[1] === '0' ? 0 : 1) : (String(p.result).startsWith('status: timeout') ? 124 : 1),
-        ms: msM ? Number(msM[1]) : 0,
-      });
-      renderTerminal();
-    });
-    state.client.on('agent.test.complete', (p) => {
-      addActivity(`Tests ${p.passed ? 'PASSED ✓' : 'FAILED ✗'}`, `${p.cmd} (attempt ${p.attempt})`, p.passed ? 'done' : 'run');
-    });
-    state.client.on('agent.completed', (p) => {
-      state.working = false;
-      setPill('connected', 'ok');
-      $('stAgentStatus').textContent = p.status === 'plan_aborted' ? 'idle (plan aborted)' : 'idle';
-      const extra = p.usage ? `\n\n[usage] in ${p.usage.prompt} · out ${p.usage.completion} · calls ${p.usage.calls}` : '';
-      addActivity('Agent completed', String(p.finalAnswer).slice(0, 1500) + extra, 'done');
-      closeModal();
-    });
-    state.client.on('agent.error', (p) => {
-      state.working = false;
-      setPill('error', 'err');
-      addActivity('Agent error', `${p.message}\n${p.hint || ''}`, 'err');
-      closeModal();
-    });
-
-    state.client.connect().then(refreshHealth).catch((e) => { setPill('offline', 'err'); toast('Bridge unreachable: ' + e.message); });
+      if (!result.sessions.length) $('sessionList').append(node('p', 'empty', 'No saved sessions yet.'));
+    } catch (err) { $('sessionList').replaceChildren(node('p', 'empty', err.message)); }
   }
-
-  function refreshHealth() {
-    if (!state.client) return;
-    state.client.health().then((h) => {
-      if (!h.ok) return;
-      $('setConnStatus').textContent = 'connected ✓';
-      $('setProvider').textContent = h.config.model + ' @ ' + h.config.provider;
-      $('setKeys').textContent = h.config.keys.map((k) => k.masked).join('  ');
-      setPill('connected', 'ok');
-      $('inpModelCfg').placeholder = h.config.model;
-    }).catch(() => { $('setConnStatus').textContent = 'unreachable'; setPill('offline', 'err'); });
-  }
+  $('taskForm').onsubmit = async e => {
+    e.preventDefault(); if (state.working || state.submitting) return;
+    if (!state.client?.isConnected()) { toast('Connect the bridge in Settings first'); return go('settings'); }
+    state.submitting = true; $('send').disabled = true;
+    const repo = $('repo').value.trim(), task = $('task').value.trim();
+    try {
+      if (!repo || !task) throw new Error('Project path and task are required');
+      save('fj_repo', repo); save('fj_provider', $('provider').value); save('fj_model', $('model').value.trim());
+      await state.client.run({ repo, task, mode: $('mode').value === 'auto' ? 'auto' : 'confirm', plan: $('mode').value === 'plan', providerId: $('provider').value || null, model: $('model').value.trim() || null, resumeSessionId: state.resume });
+      go('activity');
+    } catch (err) { toast(err.message); }
+    finally { state.submitting = false; $('send').disabled = state.working; }
+  };
+  document.querySelectorAll('[data-go]').forEach(n => n.onclick = () => go(n.dataset.go));
+  $('connect').onclick = connect;
+  $('newTask').onclick = () => { if (state.working) return; state.resume = null; $('task').value = ''; $('resumeNote').textContent = 'The agent runs on your connected host, not inside this app.'; $('task').focus(); };
+  $('cancel').onclick = async () => { $('cancel').disabled = true; try { await state.client.cancel(); $('currentAction').textContent = 'Stopping…'; $('runSubtitle').textContent = 'Waiting for the host. An executing command may take up to 30 seconds.'; } catch (err) { toast(err.message); $('cancel').disabled = !state.working; } };
+  $('approve').onclick = () => resolveConfirmation(true); $('reject').onclick = () => resolveConfirmation(false);
+  $('confirmation').addEventListener('cancel', e => { e.preventDefault(); resolveConfirmation(false); });
+  $('closePreview').onclick = () => $('filePreview').hidden = true;
+  $('undo').onclick = async () => {
+    if (!state.client || state.working) return toast('Connect the bridge and finish the active run first');
+    const repo = $('repo').value.trim(); if (!repo) return toast('Set a project path on Home first');
+    if (!window.confirm('Undo recorded agent file changes in this project? Command effects are not reversible.')) return;
+    try { const r = await state.client.undo(repo); toast(r.data.done ? 'Undo completed. Review your project.' : 'Undo refused: ' + (r.data.conflicts || []).join('; ')); state.files = []; previewFiles(); $('filePreview').hidden = true; } catch (err) { toast(err.message); }
+  };
+  $('bridgeUrl').value = read('fj_bridge', location.protocol.startsWith('http') && location.pathname.startsWith('/app/') ? location.origin : 'http://127.0.0.1:8787');
+  $('repo').value = read('fj_repo'); $('model').value = read('fj_model');
+  $('provider').onchange = () => { const p = state.profiles.find(p => p.id === $('provider').value); $('model').value = ''; $('model').placeholder = p?.model || 'Auto-routed'; };
+  previewFiles(); $('termList').append(node('p', 'empty', 'No commands have run yet.'));
+  window.addEventListener('pagehide', () => state.client?.close());
+  window.addEventListener('pageshow', e => { if (e.persisted) connect(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && state.client && !state.client.isConnected()) connect(); });
+  go(location.hash.slice(1) || 'home'); connect();
+})();
