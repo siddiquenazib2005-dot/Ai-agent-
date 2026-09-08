@@ -1,195 +1,135 @@
-/**
- * bridge/server.js — HTTP/SSE bridge for remote my-agent clients (Android app).
- *
- * Architecture choice (documented): for this environment, a LOCAL HTTP +
- * Server-Sent-Events bridge is the realistic option — the Node core already
- * streams, SSE is a one-way push protocol (perfect for agent progress), and
- * confirmation is a simple POST. No WebSocket or broker dependency. The CLI is
- * untouched; the bridge is an ADDITIONAL interface.
- *
- * Events (structured; clients never parse terminal text):
- *   agent.started | agent.thinking | agent.stream.delta | agent.tool.start |
- *   agent.confirmation.required | agent.tool.complete | agent.plan.ready |
- *   agent.file.changed | agent.command.output | agent.test.complete |
- *   agent.completed | agent.error
- *
- * Security: intended for LOCAL/trusted networks — no caller authentication.
- * Do not expose to the public internet. API keys are never logged and are
- * masked in /health.
- */
-
 import http from 'node:http';
-import { runAgentLoop, undoLastCheckpoint, listSessions } from '../agentLoop.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { timingSafeEqual } from 'node:crypto';
+import { runAgentLoop, undoLastCheckpoint, listSessions, safeResolve, assertInsideRepo } from '../agentLoop.js';
 import { loadLlmConfig } from '../llmConfig.js';
-
-const VERSION = '0.1.0';
-
-function maskKey(k) {
-  if (!k || k.length < 8) return '***';
-  return `${k.slice(0, 4)}…${k.slice(-4)}`;
+import { redactSecrets, registerSecrets } from '../commandPolicy.js';
+const APP = fileURLToPath(new URL('../android-app/', import.meta.url)).replace(/\/$/, '');
+const LOCAL = new Set(['127.0.0.1', 'localhost', '::1']);
+function clean(v) {
+  if (typeof v === 'string') return redactSecrets(v);
+  if (Array.isArray(v)) return v.map(clean);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, clean(x)]));
+  return v;
 }
-
-/** Minimal SSE hub for broadcasting to EventSource clients. */
-function createHub() {
-  const clients = new Set();
-  return {
-    clientCount: () => clients.size,
-    add: (res) => { clients.add(res); return () => clients.delete(res); },
-    broadcast: (name, payload) => {
-      const data = `event: ${name}\ndata: ${JSON.stringify(payload)}\n\n`;
-      for (const res of clients) {
-        try { res.write(data); } catch { clients.delete(res); }
-      }
-    },
+function equal(a, b) { const x = Buffer.from(a || ''), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); }
+/** Single-run local bridge. Remote binding requires authentication and TLS/tunnel.
+ * Snapshots recover current state after reconnect; missed deltas are not replayed. */
+export async function startBridge({ port = 8787, host = '127.0.0.1', token = process.env.BRIDGE_TOKEN || '' } = {}) {
+  if (!LOCAL.has(host) && token.length < 32) throw new Error('Remote binding requires BRIDGE_TOKEN (32+ characters) and TLS or a secure tunnel');
+  registerSecrets([token]);
+  const clients = new Set(), pending = new Map(), queue = [], files = new Map();
+  let activeRun = null, lastRun = null, completion = null, cancelled = false, controller, running = Promise.resolve();
+  const config = () => loadLlmConfig(process.env); config();
+  const snapshot = () => ({ activeRun, lastRun, completion, changedFiles: [...files.values()], pending: [...pending.values()].map(e => e.payload) });
+  const broadcast = (name, payload) => {
+    const data = 'event: ' + name + '\ndata: ' + JSON.stringify(clean(payload)) + '\n\n';
+    for (const res of clients) {
+      if (res.destroyed || res.writableLength > 1024 * 1024) { res.destroy(); clients.delete(res); }
+      else res.write(data);
+    }
   };
-}
-
-export async function startBridge({ port = 8787, host = '127.0.0.1' } = {}) {
-  const hub = createHub();
-  const pending = new Map();   // confirmId -> { label, preview, resolve }
-  const readyQueue = [];       // confirmIds announced (emit precedes confirmAction)
-  let activeRun = null;        // { repo, task, startedAt }
-  let cancelRequested = false;
-
-  const config = loadLlmConfig(process.env);
-
-  // --- emitter wired into runAgentLoop -------------------------------------
-  const emitter = {
-    emit(name, payload) {
-      if (name === 'agent.confirmation.required') {
-        pending.set(payload.id, { label: payload.label, preview: null, resolve: null });
-        readyQueue.push(payload.id);
-      }
-      hub.broadcast(name, payload);
-    },
+  const emitter = { emit(name, payload) {
+    if (name === 'agent.confirmation.required') { pending.set(payload.id, { payload }); queue.push(payload.id); }
+    if (name === 'agent.file.changed') files.set(payload.path, payload);
+    if (name === 'agent.completed') completion = payload;
+    broadcast(name, payload);
+  } };
+  const confirmAction = async () => {
+    const id = queue.shift(), entry = pending.get(id);
+    if (!entry || cancelled) return false;
+    return new Promise(resolve => {
+      entry.resolve = approved => { clearTimeout(entry.timer); pending.delete(id); resolve(approved); };
+      entry.timer = setTimeout(() => entry.resolve(false), 300000);
+    });
   };
-
-  const confirmAction = async (label, preview) => {
-    const id = readyQueue.shift();
-    if (!id || !pending.has(id)) return false; // no matching event -> reject safely
-    const entry = pending.get(id);
-    entry.label = label; entry.preview = preview;
-    return new Promise((resolve) => { entry.resolve = resolve; });
-  };
-
-  const cancelRequestedFn = () => cancelRequested;
-
-  // --- HTTP server ----------------------------------------------------------
-  const server = http.createServer();
-  server.on('request', async (req, res) => {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const send = (code, obj, ctype = 'application/json') => {
-      res.writeHead(code, {
-        'content-type': ctype,
-        'access-control-allow-origin': '*',
-        'access-control-allow-methods': 'GET, POST, OPTIONS',
-        'access-control-allow-headers': 'content-type',
-      });
-      res.end(typeof obj === 'string' ? obj : JSON.stringify(obj));
-    };
-    if (req.method === 'OPTIONS') return send(204, '');
-    if (req.method === 'GET' && url.pathname === '/health') {
-      return send(200, {
-        ok: true,
-        version: VERSION,
-        config: {
-          provider: config.providerName,
-          model: config.model,
-          timeoutMs: config.timeoutMs,
-          keys: config.keyManager.entries.map((k) => ({ name: k.name, masked: maskKey(k.key), enabled: !k.disabledUntil })),
-        },
-        sessions: listSessions().length,
-        activeRun: activeRun ? { repo: activeRun.repo, task: activeRun.task, startedAt: activeRun.startedAt } : null,
-        clients: hub.clientCount(),
-      });
-    }
-    if (req.method === 'GET' && url.pathname === '/events') {
-      res.writeHead(200, {
-        'content-type': 'text/event-stream',
-        'cache-control': 'no-cache',
-        connection: 'keep-alive',
-        'access-control-allow-origin': '*',
-      });
-      res.write(': connected\n\n');
-      const remove = hub.add(res);
-      const heartbeat = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 15_000);
-      req.on('close', () => { remove(); clearInterval(heartbeat); });
-      return;
-    }
-    if (req.method === 'GET' && url.pathname === '/sessions') {
-      return send(200, { sessions: listSessions() });
-    }
-    // POST endpoints need a JSON body.
-    let body = '';
-    for await (const chunk of req) body += chunk;
-    let json = {};
-    try { json = body ? JSON.parse(body) : {}; } catch { return send(400, { error: 'invalid JSON body' }); }
-
-    if (req.method === 'POST' && url.pathname === '/run') {
-      if (activeRun) return send(409, { error: 'an agent run is already active; wait for agent.completed or POST /cancel' });
-      const { repo, task, mode = 'confirm', plan = false, split = false, model } = json;
-      if (typeof repo !== 'string' || typeof task !== 'string' || !repo.trim() || !task.trim()) {
-        return send(400, { error: '"repo" and "task" (strings) are required' });
+  const rejectPending = () => { for (const e of pending.values()) { clearTimeout(e.timer); e.resolve?.(false); } pending.clear(); queue.length = 0; };
+  const server = http.createServer(async (req, res) => {
+    const origin = req.headers.origin;
+    const allowed = new Set(['https://appassets.androidplatform.net', ...(process.env.BRIDGE_ALLOWED_ORIGINS || '').split(',').filter(Boolean)]);
+    for (const h of ['127.0.0.1', 'localhost', '[::1]']) allowed.add('http://' + h + ':' + server.address()?.port);
+    const headers = { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-headers': 'content-type, authorization', ...(origin && allowed.has(origin) ? { 'access-control-allow-origin': origin, vary: 'Origin' } : {}) };
+    const send = (status, obj) => { if (!res.headersSent) res.writeHead(status, headers); res.end(JSON.stringify(clean(obj))); };
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const requestHost = new URL('http://' + (req.headers.host || '')).hostname.replace(/^\[|\]$/g, '');
+      if (LOCAL.has(host) && !LOCAL.has(requestHost)) return send(403, { error: 'Untrusted host' });
+      if (origin && !allowed.has(origin)) return send(403, { error: 'Untrusted origin' });
+      if (req.method === 'OPTIONS') { res.writeHead(204, headers); return res.end(); }
+      if (req.method === 'GET' && url.pathname.startsWith('/app/')) {
+        const file = safeResolve(APP, decodeURIComponent(url.pathname.slice(5)) || 'index.html'); assertInsideRepo(APP, file);
+        const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' }[path.extname(file)];
+        if (!mime || !fs.existsSync(file) || !fs.statSync(file).isFile()) return send(404, { error: 'Asset not found' });
+        res.writeHead(200, { ...headers, 'content-type': mime }); return res.end(fs.readFileSync(file));
       }
-      if (!['confirm', 'auto'].includes(mode)) return send(400, { error: 'mode must be "confirm" or "auto"' });
-      activeRun = { repo, task, startedAt: new Date().toISOString() };
-      cancelRequested = false;
-      send(200, { accepted: true, repo, task, mode });
-      // Run in the background; all progress is pushed over /events.
-      (async () => {
-        try {
-          await runAgentLoop(repo, task, {
-            mode, plan: Boolean(plan), split: Boolean(split),
-            modelOverride: typeof model === 'string' && model ? model : null,
-            emitter, confirmAction, cancelRequested: cancelRequestedFn,
-          });
-        } catch (err) {
-          hub.broadcast('agent.error', { message: String(err.message), hint: 'see agent.log' });
-        } finally {
-          activeRun = null;
-          cancelRequested = false;
-        }
-      })();
-      return;
-    }
-    if (req.method === 'POST' && url.pathname === '/cancel') {
-      if (!activeRun) return send(409, { error: 'no active run to cancel' });
-      cancelRequested = true;
-      return send(200, { cancelled: true });
-    }
-    if (req.method === 'POST' && url.pathname.startsWith('/confirm/')) {
-      const id = decodeURIComponent(url.pathname.slice('/confirm/'.length));
-      const entry = pending.get(id);
-      if (!entry) return send(404, { error: `no pending confirmation with id ${id}` });
-      if (!entry.resolve) return send(409, { error: 'confirmation not awaiting resolution yet' });
-      entry.resolve(!!json.approved);
-      pending.delete(id);
-      return send(200, { resolved: true, approved: !!json.approved });
-    }
-    if (req.method === 'POST' && url.pathname === '/undo') {
-      if (typeof json.repo !== 'string' || !json.repo) return send(400, { error: '"repo" is required' });
-      try {
-        const r = undoLastCheckpoint(json.repo);
-        return send(200, { done: r.done, restored: r.restored, deleted: r.deleted, conflicts: r.conflicts, warnings: r.warnings });
-      } catch (err) {
-        return send(500, { error: err.message });
+      if (token && !equal(req.headers.authorization, 'Bearer ' + token)) return send(401, { error: 'Bridge authorization required' });
+      if (req.method === 'GET' && url.pathname === '/health') {
+        const c = config(); return send(200, { ok: true, version: '0.2.0', config: { provider: c.providerName, providerId: c.providerId, model: c.model, timeoutMs: c.timeoutMs, keys: c.keyManager.entries.map((k, i) => ({ name: 'Key ' + (i + 1), masked: '[configured…]', enabled: k.disabledUntil <= Date.now() })) }, sessions: listSessions().length, activeRun, clients: clients.size });
       }
-    }
-    return send(404, { error: `no route: ${req.method} ${url.pathname}` });
+      if (req.method === 'GET' && url.pathname === '/providers') return send(200, { providers: config().profiles });
+      if (req.method === 'GET' && url.pathname === '/sessions') return send(200, { sessions: listSessions() });
+      if (req.method === 'GET' && url.pathname === '/events') {
+        res.writeHead(200, { ...headers, 'content-type': 'text/event-stream', connection: 'keep-alive', 'x-accel-buffering': 'no' });
+        res.write('event: agent.snapshot\ndata: ' + JSON.stringify(clean(snapshot())) + '\n\n'); clients.add(res);
+        const timer = setInterval(() => res.write(': ping\n\n'), 15000);
+        res.on('close', () => { clearInterval(timer); clients.delete(res); }); return;
+      }
+      if (req.method !== 'POST') return send(404, { error: 'Unknown route' });
+      let body = '', size = 0;
+      for await (const chunk of req) { size += chunk.length; if (size > 65536) return send(413, { error: 'Request too large' }); body += chunk; }
+      let json; try { json = JSON.parse(body || '{}'); } catch { return send(400, { error: 'Invalid JSON body' }); }
+      if (!json || Array.isArray(json) || typeof json !== 'object') return send(400, { error: 'Body must be a JSON object' });
+      if (url.pathname === '/run') {
+        if (activeRun) return send(409, { error: 'An agent run is already active' });
+        const { repo, task, mode = 'confirm', plan = false, split = false, providerId, model, resumeSessionId } = json;
+        if (typeof repo !== 'string' || typeof task !== 'string' || !repo.trim() || !task.trim()) return send(400, { error: 'Repository and task are required' });
+        if (!['confirm', 'auto'].includes(mode) || typeof plan !== 'boolean' || typeof split !== 'boolean') return send(400, { error: 'Invalid execution flags' });
+        if (providerId != null && typeof providerId !== 'string') return send(400, { error: 'Invalid provider profile' });
+        let root, c;
+        try { root = fs.realpathSync(repo); if (!fs.statSync(root).isDirectory()) throw new Error(); c = loadLlmConfig(process.env, providerId); } catch { return send(400, { error: 'Repository or provider profile is unavailable' }); }
+        if (!c.hasKey) return send(400, { error: 'Configure provider credentials on the bridge host first' });
+        activeRun = { repo: root, task, startedAt: new Date().toISOString(), providerId: c.providerId, model: model || c.model };
+        lastRun = activeRun; completion = null; files.clear(); rejectPending(); cancelled = false; controller = new AbortController();
+        send(200, { accepted: true });
+        running = (async () => {
+          try { await runAgentLoop(root, task, { mode, plan, split, providerId: c.providerId, modelOverride: typeof model === 'string' && model ? model : null, resumeSessionId: typeof resumeSessionId === 'string' ? resumeSessionId : null, emitter, confirmAction, signal: controller.signal, cancelRequested: () => cancelled }); }
+          catch (err) {
+            if (cancelled) emitter.emit('agent.completed', { status: 'cancelled', finalAnswer: 'Cancelled by user. Review changes already made.' });
+            else { completion = { status: 'error', finalAnswer: redactSecrets(err.message) }; broadcast('agent.error', { message: err.message }); }
+          } finally { activeRun = null; cancelled = false; rejectPending(); broadcast('agent.snapshot', snapshot()); }
+        })(); return;
+      }
+      if (url.pathname === '/cancel') { if (!activeRun) return send(409, { error: 'No active run' }); cancelled = true; controller.abort(); rejectPending(); return send(200, { requested: true }); }
+      if (url.pathname.startsWith('/confirm/')) {
+        if (typeof json.approved !== 'boolean') return send(400, { error: 'approved must be a boolean' });
+        const e = pending.get(decodeURIComponent(url.pathname.slice(9)));
+        if (!e) return send(404, { error: 'Confirmation no longer pending' });
+        if (!e.resolve) return send(409, { error: 'Confirmation not ready; retry' });
+        e.resolve(json.approved); return send(200, { resolved: true, approved: json.approved });
+      }
+      if (url.pathname === '/file') {
+        if (!lastRun || json.repo !== lastRun.repo || !files.has(json.path)) return send(403, { error: 'Only files changed in the latest bridge task can be previewed' });
+        if (/(^|\/)(\.env(?:\..*)?|providers\.json|credentials[^/]*|[^/]*\.(key|pem|jks|keystore))$/i.test(json.path)) return send(403, { error: 'Sensitive preview blocked' });
+        const file = safeResolve(lastRun.repo, json.path); assertInsideRepo(lastRun.repo, file);
+        if (!fs.statSync(file).isFile() || fs.statSync(file).size > 262144) return send(413, { error: 'Preview supports text files up to 256 KB' });
+        const bytes = fs.readFileSync(file); if (bytes.includes(0)) return send(415, { error: 'Binary preview unsupported' });
+        return send(200, { path: json.path, content: bytes.toString('utf8') });
+      }
+      if (url.pathname === '/undo') {
+        if (activeRun) return send(409, { error: 'Finish the active run before undo' });
+        if (typeof json.repo !== 'string' || !json.repo) return send(400, { error: 'Repository required' });
+        const result = undoLastCheckpoint(json.repo); files.clear(); return send(200, result);
+      }
+      return send(404, { error: 'Unknown route' });
+    } catch { return send(400, { error: 'Request failed; check path and configuration' }); }
   });
-
-  server.listen(port, host);
-  // With port 0 the real port is assigned asynchronously — poll until bound.
-  let actual = port;
-  for (let i = 0; i < 100; i++) {
-    const a = server.address?.();
-    if (a?.port) { actual = a.port; break; }
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  return {
-    baseUrl: `http://${host}:${actual}`,
-    port: actual,
-    close: () => { try { server.close(); } catch { /* already closed */ } },
-    _hub: hub,
+  server.requestTimeout = 30000;
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, resolve); });
+  const actual = server.address().port;
+  return { baseUrl: 'http://' + (host.includes(':') ? '[' + host + ']' : host) + ':' + actual, port: actual,
+    close() { cancelled = true; controller?.abort(); rejectPending(); for (const r of clients) r.end(); clients.clear(); server.close(); server.closeAllConnections(); return running; },
+    _hub: { clientCount: () => clients.size, broadcast },
   };
 }
