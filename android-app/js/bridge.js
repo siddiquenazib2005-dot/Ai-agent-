@@ -49,7 +49,9 @@
         })(); return ready;
       },
       close() { controller?.abort(); controller = null; connected = false; connecting = null; },
-      health: () => request('/health').then(r => r.data), providers: () => request('/providers').then(r => r.data), listSessions: () => request('/sessions').then(r => r.data),
+      health: () => request('/health').then(r => r.data), providers: () => request('/providers').then(r => r.data), listSessions: () => request('/sessions').then(r => r.data), repositories: () => request('/repositories').then(r => r.data),
+      files: (repo, dir = '') => request('/files?repo=' + encodeURIComponent(repo) + '&dir=' + encodeURIComponent(dir)).then(r => r.data),
+      browseFile: (repo, path) => request('/file?repo=' + encodeURIComponent(repo) + '&path=' + encodeURIComponent(path)).then(r => r.data),
       run: body => request('/run', body), confirm: (id, approved) => request('/confirm/' + encodeURIComponent(id), { approved }), cancel: () => request('/cancel', {}), undo: repo => request('/undo', { repo }), file: (repo, path) => request('/file', { repo, path }).then(r => r.data),
     }; return api;
   }
