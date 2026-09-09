@@ -8,16 +8,113 @@
 <title>JARVIS · AI Coding Agent</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23070b10' stroke='%233aa7ff'/%3E%3Cpath d='M10 9v11c0 5 9 5 9 0V9' fill='none' stroke='%233aa7ff' stroke-width='3'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="css/styles.css">
+<link rel="stylesheet" href="css/settings.css">
 </head>
 <body>
-<header class="app-header"><button class="icon-button menu-button" aria-label="Open menu">☰</button><div class="brand"><strong>JARVIS</strong><small>AI CODING AGENT</small></div><button class="avatar" data-go="settings" aria-label="Open connection settings"><span>J</span><i id="avatarStatus"></i></button></header>
+<header class="app-header">
+  <button class="icon-button menu-button" aria-label="Open menu">☰</button>
+  <div class="brand"><strong>JARVIS</strong><small>AI CODING AGENT</small></div>
+  <button class="avatar" data-go="settings" aria-label="Open connection settings"><span>J</span><i id="avatarStatus"></i></button>
+</header>
+
 <main>
-<section class="screen active" id="screen-home" aria-labelledby="home-title"><div class="hero"><h1 id="home-title">What would you like to build?</h1><p>Plan, write, edit and run code with Jarvis.<br>Your ideas, your agent.</p></div><div class="quick-actions" aria-label="Quick task actions"><button data-prompt="Build a feature">⌁ <span>Build a feature</span></button><button data-prompt="Fix a bug">▣ <span>Fix a bug</span></button><button data-prompt="Explain this code">▤ <span>Explain code</span></button><button data-prompt="Refactor this project">⌁ <span>Refactor</span></button><button data-prompt="Evaluate this repository">◇ <span>Evaluate a repo</span></button><button data-prompt="">••• <span>More</span></button></div><form id="taskForm" class="task-composer"><textarea id="taskInput" maxlength="16000" placeholder="Describe what you want Jarvis to do..." aria-label="Task description" required></textarea><div class="composer-actions"><button type="button" class="round-action" id="attachButton" aria-label="Attach files" title="Attachments are not enabled in this build">＋</button><label class="compact-select repo-select">⌘<select id="repoSelect" aria-label="Repository"><option value="">Repository</option></select></label><label class="compact-select">◉<select id="modeSelect" aria-label="Execution mode"><option value="confirm">Confirm</option><option value="plan">Plan</option><option value="auto">Auto</option></select></label><button type="submit" class="send-button" id="sendButton" aria-label="Run task">↑</button></div></form><div class="section-heading"><h2>Recent tasks</h2><button data-go="tasks">View all ›</button></div><div id="recentTasks" class="task-list"><div class="empty-state">Connect Jarvis to load task history.</div></div></section>
-<section class="screen" id="screen-tasks" aria-labelledby="tasks-title"><div id="tasksListView"><h1 class="page-title" id="tasks-title">Tasks</h1><div class="filter-tabs" role="tablist"><button class="active" data-filter="all">All</button><button data-filter="running">Running</button><button data-filter="completed">Completed</button><button data-filter="failed">Failed</button></div><div id="allTasks" class="task-list"><div class="empty-state">No tasks yet.</div></div></div><div id="taskDetailView" hidden><div class="breadcrumb"><button id="backToTasks">Tasks</button><span>›</span><strong id="detailTaskName">Task</strong><button class="more-button" aria-label="Task options">⋮</button></div><article class="agent-card"><div class="agent-summary"><div class="progress-ring" id="progressRing"><span></span></div><div><h2 id="agentStatusTitle">Jarvis is ready</h2><p id="agentStatusText">Start a task from Home.</p></div><button id="stopButton" class="stop-button" disabled>□ Stop</button></div><div id="stepTimeline" class="step-timeline"></div></article><article class="output-card"><div class="output-heading"><h2>Live output</h2><button id="expandOutput">Open in terminal ↗</button></div><pre id="liveOutput"><span class="muted-output">Waiting for real agent output…</span></pre></article></div></section>
-<section class="screen" id="screen-files" aria-labelledby="files-title"><div class="page-header"><h1 id="files-title">Files</h1><div><button class="icon-button" id="fileSearchButton" aria-label="Search files">⌕</button><button class="icon-button" id="fileRootButton" aria-label="Open repository root">▱</button><button class="icon-button" aria-label="File options">⋮</button></div></div><div id="fileSearch" class="inline-search" hidden><input id="fileSearchInput" placeholder="Filter this folder" aria-label="Filter current folder"><button id="closeFileSearch">×</button></div><nav id="fileBreadcrumb" class="file-breadcrumb" aria-label="Current folder"></nav><div id="fileList" class="file-list"><div class="empty-state">Select a repository to browse real files.</div></div><article id="filePreview" class="file-preview" hidden><div class="output-heading"><h2 id="previewTitle">Preview</h2><button id="closePreview">Close</button></div><pre id="previewContent"></pre></article></section>
-<section class="screen" id="screen-settings" aria-labelledby="settings-title"><h1 class="page-title" id="settings-title">Settings</h1><div id="disconnectBanner" class="connection-banner"><div><strong>Agent bridge is disconnected</strong><span>Connect to run tasks and browse projects.</span></div><button id="bannerConnect">Connect</button></div><div class="settings-section"><h2>Provider</h2><button class="settings-row" id="providerRow"><span>Provider</span><strong id="providerValue">—</strong><i>›</i></button><button class="settings-row" id="modelRow"><span>Model</span><strong id="modelValue">Auto</strong><i>›</i></button><div class="settings-row static"><span>API Key</span><strong id="keyValue">Not configured</strong><i>›</i></div><div class="settings-row static"><span>Environment</span><strong>Development</strong><i>›</i></div></div><div class="settings-section"><h2>Project</h2><label class="settings-input"><span>Repository path</span><input id="repoPathInput" placeholder="/home/you/project" spellcheck="false"></label></div><div class="settings-section"><h2>Agent</h2><label class="settings-row"><span>Auto-approve safe edits</span><input type="checkbox" class="switch" id="autoApprove"></label><label class="settings-row"><span>Enable terminal access</span><input type="checkbox" class="switch" id="terminalAccess" checked></label><label class="settings-row disabled"><span>Enable network access<small>Requires an OS sandbox; unavailable in this build</small></span><input type="checkbox" class="switch" id="networkAccess" disabled></label></div><details class="diagnostics"><summary>Bridge & diagnostics</summary><label>Bridge URL<input id="bridgeUrl" type="url" placeholder="http://127.0.0.1:8787"></label><label>Bridge token<input id="bridgeToken" type="password" autocomplete="off" placeholder="Held in memory only"></label><p id="diagnosticsText">No diagnostics yet.</p><button id="retryConnection">Retry connection</button></details><div class="danger-zone"><h2>Danger Zone</h2><button id="disconnectButton">⌁ Disconnect</button></div></section>
+  <section class="screen active" id="screen-home" aria-labelledby="home-title">
+    <div class="hero">
+      <h1 id="home-title">What would you like to build?</h1>
+      <p>Plan, write, edit and run code with Jarvis.<br>Your ideas, your agent.</p>
+    </div>
+    <div class="quick-actions" aria-label="Quick task actions">
+      <button data-prompt="Build a feature">⌁ <span>Build a feature</span></button>
+      <button data-prompt="Fix a bug">▣ <span>Fix a bug</span></button>
+      <button data-prompt="Explain this code">▤ <span>Explain code</span></button>
+      <button data-prompt="Refactor this project">⌁ <span>Refactor</span></button>
+      <button data-prompt="Evaluate this repository">◇ <span>Evaluate a repo</span></button>
+      <button data-prompt="">••• <span>More</span></button>
+    </div>
+    <form id="taskForm" class="task-composer">
+      <textarea id="taskInput" maxlength="16000" placeholder="Describe what you want Jarvis to do..." aria-label="Task description" required></textarea>
+      <div class="composer-actions">
+        <button type="button" class="round-action" id="attachButton" aria-label="Attach files" title="Attachments are not enabled in this build">＋</button>
+        <label class="compact-select repo-select">⌘<select id="repoSelect" aria-label="Repository"><option value="">Repository</option></select></label>
+        <label class="compact-select">◉<select id="modeSelect" aria-label="Execution mode"><option value="confirm">Confirm</option><option value="plan">Plan</option><option value="auto">Auto</option></select></label>
+        <button type="submit" class="send-button" id="sendButton" aria-label="Run task">↑</button>
+      </div>
+    </form>
+    <div class="section-heading"><h2>Recent tasks</h2><button data-go="tasks">View all ›</button></div>
+    <div id="recentTasks" class="task-list"><div class="empty-state">Start the agent bridge on your computer, then connect in Settings to load task history.</div></div>
+  </section>
+
+  <section class="screen" id="screen-tasks" aria-labelledby="tasks-title">
+    <div id="tasksListView">
+      <h1 class="page-title" id="tasks-title">Tasks</h1>
+      <div class="filter-tabs" role="tablist">
+        <button class="active" data-filter="all">All</button><button data-filter="running">Running</button><button data-filter="completed">Completed</button><button data-filter="failed">Failed</button>
+      </div>
+      <div id="allTasks" class="task-list"><div class="empty-state">No tasks yet.</div></div>
+    </div>
+    <div id="taskDetailView" hidden>
+      <div class="breadcrumb"><button id="backToTasks">Tasks</button><span>›</span><strong id="detailTaskName">Task</strong><button class="more-button" aria-label="Task options">⋮</button></div>
+      <article class="agent-card">
+        <div class="agent-summary"><div class="progress-ring" id="progressRing"><span></span></div><div><h2 id="agentStatusTitle">Jarvis is ready</h2><p id="agentStatusText">Start a task from Home.</p></div><button id="stopButton" class="stop-button" disabled>□ Stop</button></div>
+        <div id="stepTimeline" class="step-timeline"></div>
+      </article>
+      <article class="output-card">
+        <div class="output-heading"><h2>Live output</h2><button id="expandOutput">Open in terminal ↗</button></div>
+        <pre id="liveOutput"><span class="muted-output">Waiting for real agent output…</span></pre>
+      </article>
+    </div>
+  </section>
+
+  <section class="screen" id="screen-files" aria-labelledby="files-title">
+    <div class="page-header"><h1 id="files-title">Files</h1><div><button class="icon-button" id="fileSearchButton" aria-label="Search files">⌕</button><button class="icon-button" id="fileRootButton" aria-label="Open repository root">▱</button><button class="icon-button" aria-label="File options">⋮</button></div></div>
+    <div id="fileSearch" class="inline-search" hidden><input id="fileSearchInput" placeholder="Filter this folder" aria-label="Filter current folder"><button id="closeFileSearch">×</button></div>
+    <nav id="fileBreadcrumb" class="file-breadcrumb" aria-label="Current folder"></nav>
+    <div id="fileList" class="file-list"><div class="empty-state">Select a repository to browse real files.</div></div>
+    <article id="filePreview" class="file-preview" hidden><div class="output-heading"><h2 id="previewTitle">Preview</h2><button id="closePreview">Close</button></div><pre id="previewContent"></pre></article>
+  </section>
+
+  <section class="screen" id="screen-settings" aria-labelledby="settings-title">
+    <h1 class="page-title" id="settings-title">Settings</h1>
+    <div id="disconnectBanner" class="connection-banner"><div><strong>Agent bridge is disconnected</strong><span>Jarvis runs the agent on your computer. Start it with <code>npm run bridge</code>, then connect.</span><span id="reconnectHint"></span></div><button id="bannerConnect">Connect</button></div>
+    <div class="settings-section"><h2>Active configuration</h2>
+      <button class="settings-row" id="providerRow"><span>Active profile</span><strong id="providerValue">—</strong><i>›</i></button>
+      <button class="settings-row" id="modelRow"><span>Model</span><strong id="modelValue">Auto</strong><i>›</i></button>
+      <div class="settings-row static"><span>API key</span><strong id="keyValue">Not configured</strong><i>›</i></div>
+    </div>
+    <form class="settings-section" id="providerForm" autocomplete="off"><h2>Add or update an API key</h2>
+      <label class="settings-input"><span>Profile name</span><input id="profileLabel" placeholder="OpenAI, Groq, OpenRouter…" maxlength="60" required></label>
+      <label class="settings-input"><span>Provider type</span><select id="providerType"></select></label>
+      <label class="settings-input"><span>Base URL</span><input id="providerBaseUrl" type="url" placeholder="https://api.openai.com/v1" spellcheck="false" required></label>
+      <label class="settings-input"><span>Model</span><input id="providerModel" placeholder="gpt-4o-mini" spellcheck="false" required></label>
+      <label class="settings-input"><span>API key</span><input id="providerKey" type="password" autocomplete="off" placeholder="Paste key — saved on the host only"></label>
+      <p class="hint">Works with any OpenAI-compatible API: OpenAI, Groq, OpenRouter, DeepSeek, Together, Mistral, GLM, the Gemini and Anthropic compatibility endpoints, or a local server. Keys are saved to <code>providers.json</code> on your computer with 600 permissions, and are never stored in the app, the repository or the APK.</p>
+      <div class="settings-actions"><button type="submit" id="saveProvider">Save key</button><button type="button" id="testProvider">Test key</button><button type="button" id="presetProvider">Presets</button></div>
+      <p class="status-text" id="providerStatus" role="status"></p>
+    </form>
+    <div class="settings-section"><h2>Saved profiles</h2><div id="profileList"></div></div>
+    <div class="settings-section"><h2>Project</h2>
+      <label class="settings-input"><span>Repository path</span><input id="repoPathInput" placeholder="/home/you/project" spellcheck="false"></label>
+    </div>
+    <div class="settings-section"><h2>Agent</h2>
+      <label class="settings-row"><span>Auto-approve safe edits</span><input type="checkbox" class="switch" id="autoApprove"></label>
+      <label class="settings-row"><span>Enable terminal access</span><input type="checkbox" class="switch" id="terminalAccess" checked></label>
+      <label class="settings-row disabled"><span>Enable network access<small>Requires an OS sandbox; unavailable in this build</small></span><input type="checkbox" class="switch" id="networkAccess" disabled></label>
+    </div>
+    <details class="diagnostics"><summary>Bridge & diagnostics</summary><label>Bridge URL<input id="bridgeUrl" type="url" placeholder="http://127.0.0.1:8787"></label><label>Bridge token<input id="bridgeToken" type="password" autocomplete="off" placeholder="Held in memory only"></label><p id="diagnosticsText">No diagnostics yet.</p><button id="retryConnection">Retry connection</button></details>
+    <div class="danger-zone"><h2>Danger Zone</h2><button id="disconnectButton">⌁ Disconnect</button></div>
+  </section>
 </main>
-<nav class="bottom-nav" aria-label="Primary navigation"><button class="active" data-go="home"><span>⌂</span>Home</button><button data-go="tasks"><span>⌘</span>Tasks</button><button data-go="files"><span>▣</span>Files</button><button data-go="settings"><span>⚙</span>Settings</button></nav>
-<dialog id="confirmationDialog"><div class="dialog-kicker">APPROVAL REQUIRED</div><h2 id="confirmationTitle">Review action</h2><pre id="confirmationPreview"></pre><p id="confirmationError"></p><div><button id="rejectAction">Reject</button><button id="approveAction" class="primary-action">Approve</button></div></dialog><dialog id="choiceDialog"><h2 id="choiceTitle">Choose an option</h2><div id="choiceList"></div><button id="closeChoice">Cancel</button></dialog><div id="toast" class="toast" hidden></div><script src="js/bridge.js"></script><script src="js/app.js"></script>
+
+<nav class="bottom-nav" aria-label="Primary navigation">
+  <button class="active" data-go="home"><span>⌂</span>Home</button>
+  <button data-go="tasks"><span>⌘</span>Tasks</button>
+  <button data-go="files"><span>▣</span>Files</button>
+  <button data-go="settings"><span>⚙</span>Settings</button>
+</nav>
+
+<dialog id="confirmationDialog"><div class="dialog-kicker">APPROVAL REQUIRED</div><h2 id="confirmationTitle">Review action</h2><pre id="confirmationPreview"></pre><p id="confirmationError"></p><div><button id="rejectAction">Reject</button><button id="approveAction" class="primary-action">Approve</button></div></dialog>
+<dialog id="choiceDialog"><h2 id="choiceTitle">Choose an option</h2><div id="choiceList"></div><button id="closeChoice">Cancel</button></dialog>
+<div id="toast" class="toast" hidden></div>
+<script src="js/bridge.js"></script><script src="js/app.js"></script>
 </body>
 </html>
