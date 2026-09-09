@@ -1,35 +1,16 @@
 #!/usr/bin/env bash
-# check-toolchain.sh — audits the Android build toolchain WITHOUT installing
-# anything. Exits 0 when everything needed for an APK build is present,
-# otherwise prints exactly what is missing and exits 1.
 set -u
 missing=0
-need() { # need <name> <cmd...>
-  local name="$1"; shift
-  if command -v "$1" >/dev/null 2>&1; then
-    echo "  [ok]     $name ($(command -v "$1"))"
-  else
-    echo "  [MISSING] $name"
-    missing=1
-  fi
-}
-echo "Android toolchain audit:"
-need "java (JDK)"      java
-need "javac"           javac
-need "gradle"          gradle
-need "sdkmanager"      sdkmanager
-need "adb"             adb
-need "aapt2"           aapt2
-need "npx (cordova)"   npx
-
-node -e "console.log('  [ok]     node', process.version)" 2>/dev/null || { echo "  [MISSING] node"; missing=1; }
-
-if [ "$missing" -eq 0 ]; then
-  echo "TOOLCHAIN COMPLETE — you can build an APK."
-  echo "First command: cd /tmp/my-agent-apk && npm install -g cordova && cordova create my-agent-console && cd my-agent-console && cordova platform add android"
+for tool in java javac gradle; do
+  if command -v "$tool" >/dev/null 2>&1; then echo "[OK] $tool"; else echo "[MISSING] $tool"; missing=1; fi
+done
+sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+if [[ -z "$sdk" ]]; then echo '[MISSING] ANDROID_HOME or ANDROID_SDK_ROOT'; missing=1
 else
-  echo "TOOLCHAIN INCOMPLETE — APK build is NOT possible in this environment."
-  echo "Install the missing pieces above (Android SDK / openjdk / gradle / cordova),"
-  echo "or build the APK on a machine that has them (see ../android/README.md)."
+  for item in platforms/android-35/android.jar build-tools/35.0.0/aapt2 build-tools/35.0.0/apksigner; do
+    if [[ -f "$sdk/$item" ]]; then echo "[OK] $item"; else echo "[MISSING] $item"; missing=1; fi
+  done
 fi
+if [[ "$missing" == 0 ]]; then echo 'Tooling located. Required versions: JDK 17, Gradle 8.9, Android platform 35/build-tools 35.0.0.'
+else echo 'No APK build possible until the listed prerequisites are installed.'; fi
 exit "$missing"

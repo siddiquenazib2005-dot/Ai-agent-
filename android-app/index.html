@@ -1,146 +1,23 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<meta name="theme-color" content="#0b0f14">
-<title>my-agent · Agent Console</title>
-<link rel="manifest" href="manifest.webmanifest">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#070b10">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>JARVIS · AI Coding Agent</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23070b10' stroke='%233aa7ff'/%3E%3Cpath d='M10 9v11c0 5 9 5 9 0V9' fill='none' stroke='%233aa7ff' stroke-width='3'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="css/styles.css">
 </head>
-<body class="dark">
-<header class="topbar">
-  <div class="brand">my<span class="accent">agent</span></div>
-  <div class="status-pill" id="connPill" title="bridge connection">● <span id="connText">connecting</span></div>
-</header>
-
-<main id="app">
-  <!-- HOME / AGENT -->
-  <section class="screen" id="screen-home">
-    <h1 class="screen-title">Agent</h1>
-    <div class="agent-status-card">
-      <div class="status-row"><span class="label">Status</span><span class="value ok" id="stAgentStatus">idle</span></div>
-      <div class="status-row"><span class="label">Model</span><span class="value" id="stModel">—</span></div>
-      <div class="status-row"><span class="label">Repository</span><span class="value mono" id="stRepo">—</span></div>
-      <div class="status-row"><span class="label">Mode</span><span class="value" id="stMode">confirm</span></div>
-      <div class="status-row"><span class="label">Provider</span><span class="value" id="stProvider">—</span></div>
-    </div>
-    <div class="quick-actions">
-      <button class="qa" data-go="task">＋ NEW TASK</button>
-      <button class="qa" data-go="sessions">◷ OPEN SESSION</button>
-      <button class="qa" data-go="settings">🗂 SELECT REPOSITORY</button>
-      <button class="qa" data-go="task" data-plan="1">▤ PLAN MODE</button>
-    </div>
-    <h2>Recent sessions</h2>
-    <ul class="session-list" id="homeSessions"></ul>
-  </section>
-
-  <!-- TASK -->
-  <section class="screen" id="screen-task">
-    <h1 class="screen-title">New task</h1>
-    <div class="field"><label>Repository path</label>
-      <input id="inpRepo" class="mono" placeholder="/path/to/project"></div>
-    <div class="field"><label>Task description</label>
-      <textarea id="inpTask" rows="3" placeholder="Fix authentication bug…&#10;Add a feature…&#10;Explain the repository…&#10;Improve performance…"></textarea></div>
-    <div class="mode-row">
-      <button class="mode-btn" data-mode="confirm">⚠ confirm</button>
-      <button class="mode-btn" data-mode="auto">⚡ auto</button>
-      <button class="mode-btn" data-mode="plan">▤ plan</button>
-    </div>
-    <div class="field"><label>Model <span class="dim">(optional override)</span></label>
-      <input id="inpModel" class="mono" placeholder="auto-routed"></div>
-    <button class="primary" id="btnSend">▶ Run task</button>
-    <p class="dim">Recent prompts</p>
-    <ul class="recent-list" id="recentPrompts"></ul>
-  </section>
-  <!-- PLAN -->
-  <section class="screen" id="screen-plan">
-    <h1 class="screen-title">Plan</h1>
-    <ol class="plan-steps" id="planSteps"></ol>
-    <div class="plan-actions">
-      <button class="primary" id="btnApprovePlan">✔ Approve plan</button>
-      <button class="danger" id="btnRejectPlan">✖ Reject plan</button>
-    </div>
-  </section>
-
-  <!-- ACTIVITY -->
-  <section class="screen" id="screen-activity">
-    <h1 class="screen-title">Activity <span class="dim" id="activitySession"></span></h1>
-    <div class="activity-feed" id="activityFeed"></div>
-  </section>
-
-  <!-- FILES -->
-  <section class="screen" id="screen-files">
-    <h1 class="screen-title">Files changed</h1>
-    <div class="file-list" id="fileList"></div>
-  </section>
-
-  <!-- TERMINAL -->
-  <section class="screen" id="screen-terminal">
-    <h1 class="screen-title">Terminal</h1>
-    <div class="term-list" id="termList"></div>
-  </section>
-
-  <!-- SESSIONS -->
-  <section class="screen" id="screen-sessions">
-    <h1 class="screen-title">Sessions</h1>
-    <ul class="session-list" id="sessionList"></ul>
-  </section>
-
-  <!-- SETTINGS -->
-  <section class="screen" id="screen-settings">
-    <h1 class="screen-title">Settings</h1>
-    <div class="field"><label>Bridge URL</label><input id="inpBridge" class="mono"></div>
-    <button class="primary" id="btnSaveBridge">Connect</button>
-    <div class="settings-group">
-      <h3>API configuration</h3>
-      <div class="field"><label>API key <span class="dim">(masked once saved)</span></label>
-        <input id="inpKey" class="mono" placeholder="sk-…" type="password"></div>
-      <div class="field"><label>Base URL</label><input id="inpBaseUrl" class="mono"></div>
-      <div class="field"><label>Model</label><input id="inpModelCfg" class="mono"></div>
-    </div>
-    <div class="settings-group">
-      <h3>Connection</h3>
-      <div class="status-row"><span class="label">Status</span><span class="value" id="setConnStatus">—</span></div>
-      <div class="status-row"><span class="label">Provider</span><span class="value" id="setProvider">—</span></div>
-      <div class="status-row"><span class="label">Keys</span><span class="value mono" id="setKeys">—</span></div>
-    </div>
-    <div class="settings-group"><h3>Security mode</h3>
-      <div class="mode-row">
-        <button class="mode-btn" id="btnModeConfirm">confirm</button>
-        <button class="mode-btn" id="btnModeAuto">auto</button>
-      </div>
-      <p class="dim">auto skips ordinary prompts but never bypasses command policy, blocklist, timeouts, or dangerous-action confirmation.</p>
-    </div>
-    <div class="settings-group"><h3>Advanced</h3>
-      <button class="qa" id="btnUndo">⟲ Undo last checkpoint</button>
-    </div>
-    <p class="dim">Connection: local bridge (HTTP + SSE). This app is the mobile client of the my-agent core; no API keys are stored on-device.</p>
-  </section>
+<body>
+<header class="app-header"><button class="icon-button menu-button" aria-label="Open menu">☰</button><div class="brand"><strong>JARVIS</strong><small>AI CODING AGENT</small></div><button class="avatar" data-go="settings" aria-label="Open connection settings"><span>J</span><i id="avatarStatus"></i></button></header>
+<main>
+<section class="screen active" id="screen-home" aria-labelledby="home-title"><div class="hero"><h1 id="home-title">What would you like to build?</h1><p>Plan, write, edit and run code with Jarvis.<br>Your ideas, your agent.</p></div><div class="quick-actions" aria-label="Quick task actions"><button data-prompt="Build a feature">⌁ <span>Build a feature</span></button><button data-prompt="Fix a bug">▣ <span>Fix a bug</span></button><button data-prompt="Explain this code">▤ <span>Explain code</span></button><button data-prompt="Refactor this project">⌁ <span>Refactor</span></button><button data-prompt="Evaluate this repository">◇ <span>Evaluate a repo</span></button><button data-prompt="">••• <span>More</span></button></div><form id="taskForm" class="task-composer"><textarea id="taskInput" maxlength="16000" placeholder="Describe what you want Jarvis to do..." aria-label="Task description" required></textarea><div class="composer-actions"><button type="button" class="round-action" id="attachButton" aria-label="Attach files" title="Attachments are not enabled in this build">＋</button><label class="compact-select repo-select">⌘<select id="repoSelect" aria-label="Repository"><option value="">Repository</option></select></label><label class="compact-select">◉<select id="modeSelect" aria-label="Execution mode"><option value="confirm">Confirm</option><option value="plan">Plan</option><option value="auto">Auto</option></select></label><button type="submit" class="send-button" id="sendButton" aria-label="Run task">↑</button></div></form><div class="section-heading"><h2>Recent tasks</h2><button data-go="tasks">View all ›</button></div><div id="recentTasks" class="task-list"><div class="empty-state">Connect Jarvis to load task history.</div></div></section>
+<section class="screen" id="screen-tasks" aria-labelledby="tasks-title"><div id="tasksListView"><h1 class="page-title" id="tasks-title">Tasks</h1><div class="filter-tabs" role="tablist"><button class="active" data-filter="all">All</button><button data-filter="running">Running</button><button data-filter="completed">Completed</button><button data-filter="failed">Failed</button></div><div id="allTasks" class="task-list"><div class="empty-state">No tasks yet.</div></div></div><div id="taskDetailView" hidden><div class="breadcrumb"><button id="backToTasks">Tasks</button><span>›</span><strong id="detailTaskName">Task</strong><button class="more-button" aria-label="Task options">⋮</button></div><article class="agent-card"><div class="agent-summary"><div class="progress-ring" id="progressRing"><span></span></div><div><h2 id="agentStatusTitle">Jarvis is ready</h2><p id="agentStatusText">Start a task from Home.</p></div><button id="stopButton" class="stop-button" disabled>□ Stop</button></div><div id="stepTimeline" class="step-timeline"></div></article><article class="output-card"><div class="output-heading"><h2>Live output</h2><button id="expandOutput">Open in terminal ↗</button></div><pre id="liveOutput"><span class="muted-output">Waiting for real agent output…</span></pre></article></div></section>
+<section class="screen" id="screen-files" aria-labelledby="files-title"><div class="page-header"><h1 id="files-title">Files</h1><div><button class="icon-button" id="fileSearchButton" aria-label="Search files">⌕</button><button class="icon-button" id="fileRootButton" aria-label="Open repository root">▱</button><button class="icon-button" aria-label="File options">⋮</button></div></div><div id="fileSearch" class="inline-search" hidden><input id="fileSearchInput" placeholder="Filter this folder" aria-label="Filter current folder"><button id="closeFileSearch">×</button></div><nav id="fileBreadcrumb" class="file-breadcrumb" aria-label="Current folder"></nav><div id="fileList" class="file-list"><div class="empty-state">Select a repository to browse real files.</div></div><article id="filePreview" class="file-preview" hidden><div class="output-heading"><h2 id="previewTitle">Preview</h2><button id="closePreview">Close</button></div><pre id="previewContent"></pre></article></section>
+<section class="screen" id="screen-settings" aria-labelledby="settings-title"><h1 class="page-title" id="settings-title">Settings</h1><div id="disconnectBanner" class="connection-banner"><div><strong>Agent bridge is disconnected</strong><span>Connect to run tasks and browse projects.</span></div><button id="bannerConnect">Connect</button></div><div class="settings-section"><h2>Provider</h2><button class="settings-row" id="providerRow"><span>Provider</span><strong id="providerValue">—</strong><i>›</i></button><button class="settings-row" id="modelRow"><span>Model</span><strong id="modelValue">Auto</strong><i>›</i></button><div class="settings-row static"><span>API Key</span><strong id="keyValue">Not configured</strong><i>›</i></div><div class="settings-row static"><span>Environment</span><strong>Development</strong><i>›</i></div></div><div class="settings-section"><h2>Project</h2><label class="settings-input"><span>Repository path</span><input id="repoPathInput" placeholder="/home/you/project" spellcheck="false"></label></div><div class="settings-section"><h2>Agent</h2><label class="settings-row"><span>Auto-approve safe edits</span><input type="checkbox" class="switch" id="autoApprove"></label><label class="settings-row"><span>Enable terminal access</span><input type="checkbox" class="switch" id="terminalAccess" checked></label><label class="settings-row disabled"><span>Enable network access<small>Requires an OS sandbox; unavailable in this build</small></span><input type="checkbox" class="switch" id="networkAccess" disabled></label></div><details class="diagnostics"><summary>Bridge & diagnostics</summary><label>Bridge URL<input id="bridgeUrl" type="url" placeholder="http://127.0.0.1:8787"></label><label>Bridge token<input id="bridgeToken" type="password" autocomplete="off" placeholder="Held in memory only"></label><p id="diagnosticsText">No diagnostics yet.</p><button id="retryConnection">Retry connection</button></details><div class="danger-zone"><h2>Danger Zone</h2><button id="disconnectButton">⌁ Disconnect</button></div></section>
 </main>
-
-<nav class="bottomnav">
-  <button class="nav-btn active" data-go="home">Home</button>
-  <button class="nav-btn" data-go="task">Task</button>
-  <button class="nav-btn" data-go="activity">Activity</button>
-  <button class="nav-btn" data-go="sessions">Sessions</button>
-  <button class="nav-btn" data-go="settings">Settings</button>
-</nav>
-
-<!-- Confirm / diff modal -->
-<div class="modal-backdrop hidden" id="confirmModal">
-  <div class="modal">
-    <div class="modal-head"><span id="cfLabel">—</span><button class="icon-btn" id="btnCloseModal">✕</button></div>
-    <pre class="diff-pre" id="cfPreview"></pre>
-    <div class="modal-actions">
-      <button class="danger" id="btnReject">✖ Reject</button>
-      <button class="primary" id="btnApprove">✔ Approve</button>
-    </div>
-  </div>
-</div>
-
-<div class="toast hidden" id="toast"></div>
-<script src="js/bridge.js"></script>
-<script src="js/app.js"></script>
+<nav class="bottom-nav" aria-label="Primary navigation"><button class="active" data-go="home"><span>⌂</span>Home</button><button data-go="tasks"><span>⌘</span>Tasks</button><button data-go="files"><span>▣</span>Files</button><button data-go="settings"><span>⚙</span>Settings</button></nav>
+<dialog id="confirmationDialog"><div class="dialog-kicker">APPROVAL REQUIRED</div><h2 id="confirmationTitle">Review action</h2><pre id="confirmationPreview"></pre><p id="confirmationError"></p><div><button id="rejectAction">Reject</button><button id="approveAction" class="primary-action">Approve</button></div></dialog><dialog id="choiceDialog"><h2 id="choiceTitle">Choose an option</h2><div id="choiceList"></div><button id="closeChoice">Cancel</button></dialog><div id="toast" class="toast" hidden></div><script src="js/bridge.js"></script><script src="js/app.js"></script>
 </body>
 </html>

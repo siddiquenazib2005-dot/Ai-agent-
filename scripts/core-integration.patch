@@ -1,0 +1,215 @@
+diff --git a/agentLoop.js b/agentLoop.js
+index 0898c00..43a2ea6 100644
+--- a/agentLoop.js
++++ b/agentLoop.js
+@@ -66 +66 @@ export function logEvent(event, detail = '') {
+-    fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} [${event}] ${detail}\n`);
++    fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} [${event}] ${redactSecrets(detail)}\n`);
+@@ -116 +116 @@ function capText(s, limit) {
+-function truncateForLog(value) {
++function truncateForLog(value, limit = LOG_VALUE_LIMIT) {
+@@ -118 +118 @@ function truncateForLog(value) {
+-  return str.length > LOG_VALUE_LIMIT ? `${str.slice(0, LOG_VALUE_LIMIT)}... (${str.length} chars)` : str;
++  return str.length > limit ? `${str.slice(0, limit)}... (${str.length} chars)` : str;
+@@ -328 +328 @@ export function createToolImplementations(repoRoot, state, { commandTimeoutMs =
+-          if (matcher(lines[i])) {
++          if (regex ? matcher.test(lines[i]) : matcher(lines[i])) {
+@@ -373,0 +374 @@ export function createToolImplementations(repoRoot, state, { commandTimeoutMs =
++        const startedAt = Date.now();
+@@ -382,2 +383,2 @@ export function createToolImplementations(repoRoot, state, { commandTimeoutMs =
+-        child.stdout.on('data', (d) => { stdout += d; });
+-        child.stderr.on('data', (d) => { stderr += d; });
++        child.stdout.on('data', (d) => { stdout = (stdout + d).slice(-COMMAND_OUTPUT_LIMIT); });
++        child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-COMMAND_OUTPUT_LIMIT); });
+@@ -439 +440 @@ export function createToolImplementations(repoRoot, state, { commandTimeoutMs =
+-          state.emit?.('agent.command.output', { cmd: redactSecrets(String(cmd)), result: truncateForLog(redactSecrets(String(text)), 4000) });
++          state.emit?.('agent.command.output', { cmd: redactSecrets(String(cmd)), result: capText(redactSecrets(String(text)), COMMAND_OUTPUT_LIMIT), exitCode: code, timedOut, durationMs: Date.now() - startedAt });
+@@ -661,0 +663 @@ async function callLLM(messages, config, { tools = null, onDelta = null } = {})
++        signal: config.signal,
+@@ -687 +689,12 @@ async function callLLM(messages, config, { tools = null, onDelta = null } = {})
+-async function generatePlan(task, config, contextPrefix) {
++function safeDeltaSink(config, output) {
++  const hold = Math.max(128, ...config.keyManager.entries.map(e => e.key.length));
++  let buffer = '';
++  return {
++    push(delta) {
++      buffer = redactSecrets(buffer + delta);
++      if (buffer.length > hold) { output(buffer.slice(0, -hold)); buffer = buffer.slice(-hold); }
++    },
++    flush() { if (buffer) output(redactSecrets(buffer)); buffer = ''; },
++  };
++}
++async function generatePlan(task, config, contextPrefix, emit) {
+@@ -697 +710,3 @@ async function generatePlan(task, config, contextPrefix) {
+-  const { message } = await callLLM(messages, config, { onDelta: (d) => process.stdout.write(d) });
++  const sink = safeDeltaSink(config, d => { process.stdout.write(d); emit('agent.stream.delta', { delta: d }); });
++  const { message } = await callLLM(messages, config, { onDelta: d => sink.push(d) });
++  sink.flush();
+@@ -786,0 +802 @@ export function loadSession(id) {
++  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(id)) throw new Error('Invalid session ID');
+@@ -845,0 +862 @@ async function executeToolCall(call, ctx) {
++  if (ctx.isCancelled?.()) return 'CANCELLED: no further tools executed.';
+@@ -923,0 +941 @@ async function executeToolCall(call, ctx) {
++        if (ctx.isCancelled?.()) throw new Error('Run cancelled before tool execution');
+@@ -1012,0 +1031 @@ async function agentSegment(messages, ctx, session, runUsage, iterationOffset) {
++    const sink = safeDeltaSink(ctx.config, d => { process.stdout.write(d); ctx.emit('agent.stream.delta', { delta: d }); });
+@@ -1015,4 +1034 @@ async function agentSegment(messages, ctx, session, runUsage, iterationOffset) {
+-      onDelta: (d) => {
+-        process.stdout.write(d); // Phase 14: stream as it arrives
+-        ctx.emit('agent.stream.delta', { delta: d });
+-      },
++      onDelta: d => sink.push(d),
+@@ -1019,0 +1036,2 @@ async function agentSegment(messages, ctx, session, runUsage, iterationOffset) {
++    sink.flush();
++    if (ctx.isCancelled()) return '(aborted: user cancelled)';
+@@ -1023,0 +1042 @@ async function agentSegment(messages, ctx, session, runUsage, iterationOffset) {
++    ctx.state.iterations = (ctx.state.iterations || 0) + 1;
+@@ -1028,0 +1048 @@ async function agentSegment(messages, ctx, session, runUsage, iterationOffset) {
++      messages.push(assistantMessage);
+@@ -1050,0 +1071,6 @@ async function agentSegment(messages, ctx, session, runUsage, iterationOffset) {
++function redactPayload(value) {
++  if (typeof value === 'string') return redactSecrets(value);
++  if (Array.isArray(value)) return value.map(redactPayload);
++  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactPayload(v)]));
++  return value;
++}
+@@ -1064 +1090,2 @@ export async function runAgentLoop(repoPath, task, opts = {}) {
+-  const repoRoot = path.resolve(repoPath);
++  const repoRoot = fs.realpathSync(repoPath);
++  if (!fs.statSync(repoRoot).isDirectory()) throw new Error('Repository must be a directory');
+@@ -1068 +1095 @@ export async function runAgentLoop(repoPath, task, opts = {}) {
+-    try { if (emitter) emitter.emit(name, payload); } catch (err) { logEvent('EMIT_FAILED', `${name}: ${err.message}`); }
++    try { if (emitter) emitter.emit(name, redactPayload(payload)); } catch (err) { logEvent('EMIT_FAILED', `${name}: ${err.message}`); }
+@@ -1073 +1100,2 @@ export async function runAgentLoop(repoPath, task, opts = {}) {
+-  const config = loadLlmConfig(process.env);
++  const config = loadLlmConfig(process.env, opts.providerId);
++  config.signal = opts.signal;
+@@ -1099,0 +1128 @@ ${agentInstructions}` : '');
++  if (session && fs.realpathSync(session.repo) !== repoRoot) throw new Error('Session belongs to another repository');
+@@ -1132 +1161,2 @@ ${agentInstructions}` : '');
+-    const planText = await generatePlan(task, config, contextPrefix);
++    emit('agent.thinking', { iteration: 0, model: config.model, phase: 'planning' });
++    const planText = await generatePlan(task, config, contextPrefix, emit);
+@@ -1135 +1165,5 @@ ${agentInstructions}` : '');
+-    const approved = await promptApprove();
++    let approved;
++    if (confirmAction) {
++      emit('agent.confirmation.required', { id: `plan-${activeSession.id}`, tool: 'plan', label: 'Approve this plan?', preview: planText });
++      approved = await confirmAction('Approve this plan?', planText);
++    } else approved = await promptApprove();
+@@ -1144,0 +1179 @@ ${agentInstructions}` : '');
++    messages.push({ role: 'user', content: 'Execute this approved plan:\n' + planText });
+@@ -1160,0 +1196 @@ ${agentInstructions}` : '');
++    if (isCancelled()) break;
+@@ -1171 +1207,2 @@ ${agentInstructions}` : '');
+-  if (!skipTests && state.wroteAny) {
++  let testsFailed = false;
++  if (!isCancelled() && !skipTests && state.wroteAny) {
+@@ -1176 +1213,3 @@ ${agentInstructions}` : '');
+-        const testResult = await tools.run_command({ cmd: testCmd });
++        if (isCancelled()) break;
++        const testResult = (await executeParsedToolCalls([{ id: `check-${attempt}`, function: { name: 'run_command', arguments: JSON.stringify({ cmd: testCmd }) } }], ctx))[0];
++        if (isCancelled()) break;
+@@ -1177,0 +1217 @@ ${agentInstructions}` : '');
++        testsFailed = !passed;
+@@ -1212 +1252 @@ ${agentInstructions}` : '');
+-    status: 'done',
++    status: isCancelled() ? 'cancelled' : testsFailed ? 'tests_failed' : finalAnswer.includes('MAX_ITERATIONS') ? 'limit_reached' : 'done',
+@@ -1215 +1255 @@ ${agentInstructions}` : '');
+-    iterations: totalIterations,
++    iterations: state.iterations || 0,
+diff --git a/commandPolicy.js b/commandPolicy.js
+index 975ef33..fbfd685 100644
+--- a/commandPolicy.js
++++ b/commandPolicy.js
+@@ -356,0 +357,4 @@ export function buildCommandEnvironment(baseEnv = process.env) {
++const knownSecrets = new Set();
++export function registerSecrets(values) {
++  for (const value of values) if (typeof value === 'string' && value) knownSecrets.add(value);
++}
+@@ -358 +362,3 @@ export function redactSecrets(s) {
+-  return String(s).replace(
++  let text = String(s);
++  for (const secret of [...knownSecrets].sort((a, b) => b.length - a.length)) text = text.split(secret).join('<redacted>');
++  return text.replace(/Bearer\s+[^\s"',}]+/gi, 'Bearer <redacted>').replace(
+diff --git a/index.js b/index.js
+index d4fcc4c..263532a 100644
+--- a/index.js
++++ b/index.js
+@@ -40,0 +41 @@ Usage:
++  my-agent bridge [--port 8787] [--host 127.0.0.1]  start mobile bridge
+@@ -163,2 +164,2 @@ async function handleBridge(argv) {
+-    const srv = await startBridge({ port });
+-    console.log('my-agent bridge running (local/trusted network only — no auth):');
++    const srv = await startBridge({ port, host: typeof args.host === 'string' ? args.host : '127.0.0.1' });
++    console.log('my-agent bridge running (keep local; use USB reverse or a secure tunnel):');
+diff --git a/llmConfig.js b/llmConfig.js
+index d93a4e7..15a26c1 100644
+--- a/llmConfig.js
++++ b/llmConfig.js
+@@ -30,0 +31 @@ import { redactKey } from './providers/baseProvider.js';
++import { registerSecrets } from './commandPolicy.js';
+@@ -128,0 +130 @@ export function loadProviderEntries(env = {}) {
++    id: 'environment',
+@@ -138,0 +141 @@ export function loadProviderEntries(env = {}) {
++    id: p.id || `profile-${i + 1}`,
+@@ -142,2 +145,2 @@ export function loadProviderEntries(env = {}) {
+-    apiKey: p.apiKey || null,
+-    keys: Array.isArray(p.keys) ? p.keys : [],
++    apiKey: (p.apiKeyEnv ? env[p.apiKeyEnv] : null) || p.apiKey || null,
++    keys: [...(Array.isArray(p.keys) ? p.keys : []), ...(Array.isArray(p.keyEnvs) ? p.keyEnvs.map(k => env[k]).filter(Boolean) : [])],
+@@ -155 +158 @@ export function loadProviderEntries(env = {}) {
+-export function loadLlmConfig(env = {}) {
++export function loadLlmConfig(env = {}, providerId = null) {
+@@ -163 +166,3 @@ export function loadLlmConfig(env = {}) {
+-  const primary = entries.find((p) => p.enabled) ?? entries[entries.length - 1];
++  for (const entry of entries) registerSecrets([entry.apiKey, ...entry.keys]);
++  const primary = providerId ? entries.find((p) => p.enabled && p.id === providerId) : entries.find((p) => p.enabled);
++  if (!primary) throw new Error('Selected provider profile is unavailable');
+@@ -185,0 +191,2 @@ export function loadLlmConfig(env = {}) {
++    providerId: primary.id,
++    profiles: entries.filter(p => p.enabled).map(p => ({ id: p.id, name: p.name, model: p.model, configured: Boolean(p.apiKey || p.keys.length) })),
+diff --git a/providers/baseProvider.js b/providers/baseProvider.js
+index 8c151f7..79bbe01 100644
+--- a/providers/baseProvider.js
++++ b/providers/baseProvider.js
+@@ -23,2 +23 @@ export function redactKey(key) {
+-  if (key.length <= 11) return `${key.slice(0, 2)}...${key.slice(-2)}`;
+-  return `${key.slice(0, 7)}...${key.slice(-4)}`;
++  return '[configured…]';
+diff --git a/providers/openaiCompatibleProvider.js b/providers/openaiCompatibleProvider.js
+index 00a7693..1d8d628 100644
+--- a/providers/openaiCompatibleProvider.js
++++ b/providers/openaiCompatibleProvider.js
+@@ -7,0 +8 @@ import { BaseProvider, kindError } from './baseProvider.js';
++import { redactSecrets } from '../commandPolicy.js';
+@@ -32,0 +34 @@ export class OpenAICompatibleProvider extends BaseProvider {
++    try {
+@@ -45,3 +47,2 @@ export class OpenAICompatibleProvider extends BaseProvider {
+-      throw kindError('network', `could not reach ${this.baseUrl}: ${err.message}`);
+-    } finally {
+-      clearTimeout(timer);
++      if (signal?.aborted) throw kindError('cancelled', 'Request cancelled');
++      throw kindError('network', 'Could not reach the configured provider');
+@@ -51 +52,2 @@ export class OpenAICompatibleProvider extends BaseProvider {
+-      const detail = (await response.text().catch(() => '')).slice(0, 500);
++      const detail = ''; // Provider error bodies can echo credentials. Never forward them.
++      await response.body?.cancel();
+@@ -67,0 +70 @@ export class OpenAICompatibleProvider extends BaseProvider {
++      if (onDelta && data.choices?.[0]?.message?.content) onDelta(data.choices[0].message.content);
+@@ -122,0 +126,8 @@ export class OpenAICompatibleProvider extends BaseProvider {
++    } catch (err) {
++      if (signal?.aborted) throw kindError('cancelled', 'Request cancelled');
++      if (ac.signal.aborted) throw kindError('timeout', `LLM request timed out after ${this.timeoutMs}ms`);
++      err.message = redactSecrets(err.message).split(apiKey).join('<redacted>');
++      throw err;
++    } finally {
++      clearTimeout(timer);
++    }
+diff --git a/test/f4-checkpoint-audit.test.mjs b/test/f4-checkpoint-audit.test.mjs
+index 809269c..6a55654 100644
+--- a/test/f4-checkpoint-audit.test.mjs
++++ b/test/f4-checkpoint-audit.test.mjs
+@@ -291 +291 @@ check('REG registry stored in my-agent dir (outside every test repo)',
+-  fs.existsSync(REGISTRY) && REGISTRY.startsWith('/root/my-agent'));
++  fs.existsSync(REGISTRY) && path.resolve(path.dirname(REGISTRY)) === path.resolve(new URL('..', import.meta.url).pathname));

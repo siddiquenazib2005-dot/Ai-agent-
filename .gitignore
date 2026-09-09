@@ -1,23 +1,22 @@
-# Dependencies
 node_modules/
-
-# Sensitive / secrets
 .env
 *.key
 *.pem
 credentials*
-
-# Runtime state (regenerate locally)
+providers.json
+*.jks
+*.keystore
+.gradle/
+**/build/
+local.properties
+*.apk
+*.test-backup
 sessions/
 checkpoints.json
 usage.json
 agent.log
-
-# OS / editor
 .DS_Store
 *.swp
 .idea/
 .vscode/
-
-# Test fixtures (generated)
 test/agent-test-repo/
