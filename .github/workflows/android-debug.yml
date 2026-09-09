@@ -1,1 +1,151 @@
+name: Android Debug APK
 
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - android/test-apk-20260909
+    paths:
+      - "android/**"
+      - "android-app/**"
+      - ".github/workflows/android-debug.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-debug-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-debug-apk:
+    name: Build and verify debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Accept Android SDK licenses
+        shell: bash
+        run: yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          sdkmanager \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "platform-tools"
+
+      - name: Display build environment
+        shell: bash
+        run: |
+          java -version
+          gradle --version
+          sdkmanager --list_installed
+          test -f android/settings.gradle
+          test -f android/build.gradle
+          test -f android/app/build.gradle
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            -p android \
+            :app:assembleDebug
+
+      - name: Verify APK exists
+        id: verify_apk
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK_PATH="android/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK_PATH" ]; then
+            echo "::error::APK was not created at $APK_PATH"
+            exit 1
+          fi
+
+          if [ ! -s "$APK_PATH" ]; then
+            echo "::error::APK exists but is empty: $APK_PATH"
+            exit 1
+          fi
+
+          echo "APK found:"
+          ls -lh "$APK_PATH"
+
+          unzip -t "$APK_PATH"
+
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" \
+            verify \
+            --verbose \
+            "$APK_PATH"
+
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" \
+            dump badging \
+            "$APK_PATH"
+
+          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Generate SHA-256 checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK_PATH="android/app/build/outputs/apk/debug/app-debug.apk"
+          CHECKSUM_PATH="${APK_PATH}.sha256"
+
+          sha256sum "$APK_PATH" | tee "$CHECKSUM_PATH"
+
+          test -s "$CHECKSUM_PATH"
+
+      - name: Add build summary
+        shell: bash
+        run: |
+          {
+            echo "## Future Jarvis Android Debug APK"
+            echo ""
+            echo "- **Status:** APK compiled and verified"
+            echo "- **Source commit:** \`${GITHUB_SHA}\`"
+            echo "- **APK path:** \`android/app/build/outputs/apk/debug/app-debug.apk\`"
+            echo "- **Artifact:** \`Future-Jarvis-debug-apk\`"
+            echo ""
+            echo "### SHA-256"
+            echo '```text'
+            cat android/app/build/outputs/apk/debug/app-debug.apk.sha256
+            echo '```'
+            echo ""
+            echo "> Compilation and signature verification do not constitute physical-device or live-provider testing."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload verified APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Future-Jarvis-debug-apk
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/debug/app-debug.apk.sha256
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
